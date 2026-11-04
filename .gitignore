@@ -1,0 +1,42 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local temporary files
+/tmp/
+/temp/
+*.tmp
+*.swp
+*~
+
+# Raw data is shared separately and never committed
+data/
+
+# Keep review artifacts local for now
+/review/
+
+# Early smoke runs; retain the main experiments and their trained weights
+/results/runs/FIRST_TEST/
+/results/runs/SECOND_TEST_AVERAGE/
+
+# Regenerable image grids; keep one representative explanation and all curves
+/results/runs/*/train_batch.png
+/results/runs/*/prediction.png
+!/results/runs/full_30/prediction.png
+
+# Source, tests, dependency locks, split/data-issue manifests, result tables,
+# main-run configs/metrics/predictions, and final reports remain available to commit.
+
+# macOS
+.DS_Store

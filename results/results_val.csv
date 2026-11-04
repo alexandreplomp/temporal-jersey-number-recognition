@@ -1,0 +1,4 @@
+name,variant,max_frames,epoch,param_count,sequences,sequence_loss,sequence_accuracy,sequence_macro_accuracy,sequence_macro_accuracy_5,anchor_accuracy,anchor_macro_accuracy,anchor_macro_accuracy_5,vote_accuracy,vote_macro_accuracy,vote_macro_accuracy_5,stable_share,mean_flips,hold_out_accuracy
+averaged_30,averaged,10,30,273987,856,0.1317,0.9264,0.7676,0.9537,0.8049,0.717,0.8576,0.9159,0.7607,0.9439,0.8283,0.243,
+full_30,full,10,26,416324,856,0.121,0.9393,0.768,0.9543,0.7909,0.678,0.8258,0.8867,0.7411,0.9158,0.8037,0.2932,
+pooled_30,pooled,10,25,282308,856,0.1543,0.9065,0.8089,0.9413,0.7839,0.749,0.8557,0.9042,0.7458,0.9225,0.7944,0.2827,

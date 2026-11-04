@@ -1,0 +1,22 @@
+[project]
+name = "trackbox-case"
+version = "0.1.0"
+description = "Temporal jersey number recognition from player crop sequences."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "pillow>=13.0.0",
+    "torch>=2.15.0",
+    "torchvision>=0.29.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+# Lets tests import the top-level scripts and jersey/ without installing.
+pythonpath = ["."]
+testpaths = ["tests"]

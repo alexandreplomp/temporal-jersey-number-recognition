@@ -25,7 +25,7 @@ from jersey.metrics import (
     band_accuracy, confusions, count_flips, heldout_error_share, macro, majority_baseline,
     per_number, scores, shot_bands, wilson_interval,
 )
-from jersey.model import BACKBONE_STRIDE, VARIANTS, JerseyModel, predict_digits, side_bias
+from jersey.model import VARIANTS, JerseyModel, predict_digits
 from make_splits import SPLITS, flagged_players, make_splits
 from evaluate import main as evaluate_main, prefix_answers, score, vote
 from train import main as train_main
@@ -336,18 +336,6 @@ def test_first_digit_is_never_blank():
     assert (logits[:, 0, BLANK] == float("-inf")).all()
 
 
-def test_side_bias_starts_first_query_left_and_second_right():
-    rows, columns = 3, 12
-    bias = side_bias(rows, columns).reshape(2, rows, columns)
-    middle = (columns - 1) / 2
-
-    assert (bias <= 0).all()
-    assert torch.equal(bias[:, 0], bias[:, -1])  # the same for every row
-    first, second = bias[:, 0].argmax(dim=-1).tolist()
-    assert first < middle < second
-    assert torch.allclose(bias[0, 0], bias[1, 0].flip(0))  # mirror images
-
-
 def test_read_frames_shape():
     model = JerseyModel("averaged", pretrained=False)
 
@@ -385,7 +373,7 @@ def test_attention_maps_are_kept():
 
     model(frames, mask)
 
-    cells = (IMAGE_SIZE[0] // BACKBONE_STRIDE) * (IMAGE_SIZE[1] // BACKBONE_STRIDE)
+    cells = (IMAGE_SIZE[0] // 16) * (IMAGE_SIZE[1] // 16)
     assert model.digits.last_attention.shape == (int(mask.sum()), 2, cells)
 
 
@@ -444,8 +432,8 @@ def test_predict_digits_never_gives_blank_first():
     assert (digits[:, 0] != BLANK).all()
 
 
-def test_image_size_not_divisible_by_stride_raises():
-    with pytest.raises(ValueError, match=f"divisible by {BACKBONE_STRIDE}"):
+def test_image_size_not_divisible_by_16_raises():
+    with pytest.raises(ValueError, match="divisible by 16"):
         JerseyModel("averaged", image_size=(200, 100), pretrained=False)
 
 
@@ -811,7 +799,7 @@ def one_sequence(real_frames=3, max_frames=4):
     return frames[0], mask[0]
 
 
-GRID = (IMAGE_SIZE[0] // BACKBONE_STRIDE, IMAGE_SIZE[1] // BACKBONE_STRIDE)
+GRID = (IMAGE_SIZE[0] // 16, IMAGE_SIZE[1] // 16)
 
 
 def test_query_maps_sum_to_one_per_frame_and_digit():

@@ -16,7 +16,7 @@ an untrained model (Adebayo et al. 2018): maps that look alike for both show the
 not the model. Frame removal is small when other frames can compensate, so read it next
 to the frame weights, not alone.
 
-Maps use the model's grid of BACKBONE_STRIDE-pixel cells (12 x 6 for a 192 x 96 crop), so
+Maps use the model's grid of 16 x 16 pixel cells (12 x 6 for a 192 x 96 crop), so
 attention and occlusion compare cell for cell. Occlusion covers a cell in one frame and
 reads that frame alone, since in a sequence the other frames would hide the effect.
 Functions take one sequence, frames (T, 3, H, W) and mask (T,), use its R real frames,

@@ -1,0 +1,59 @@
+{
+  "run": "full_ex49_small",
+  "split": "val",
+  "sequences": 840,
+  "torso": {
+    "rows": [
+      0.15,
+      0.55
+    ],
+    "columns": [
+      0.1,
+      0.9
+    ]
+  },
+  "baselines": {
+    "always 8": {
+      "first_digit": 0.3928571343421936,
+      "second_digit": 0.9535714387893677,
+      "number": 0.37857142090797424
+    },
+    "colour histogram": {
+      "first_digit": 0.6535714268684387,
+      "second_digit": 0.9785714149475098,
+      "number": 0.6523809432983398
+    }
+  },
+  "model": {
+    "unchanged": {
+      "first_digit": 0.9309523701667786,
+      "second_digit": 0.9952380657196045,
+      "number": 0.9285714030265808
+    },
+    "grayscale": {
+      "first_digit": 0.7059524059295654,
+      "second_digit": 0.961904764175415,
+      "number": 0.6809523701667786
+    },
+    "hue shift": {
+      "first_digit": 0.6654762029647827,
+      "second_digit": 0.9595237970352173,
+      "number": 0.6333333253860474
+    },
+    "channel swap": {
+      "first_digit": 0.7142857313156128,
+      "second_digit": 0.961904764175415,
+      "number": 0.6892856955528259
+    },
+    "torso covered": {
+      "first_digit": 0.5273809432983398,
+      "second_digit": 0.9535714387893677,
+      "number": 0.5023809671401978
+    },
+    "only torso": {
+      "first_digit": 0.6952381134033203,
+      "second_digit": 0.9857142567634583,
+      "number": 0.6857143044471741
+    }
+  }
+}

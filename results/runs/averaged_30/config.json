@@ -11,6 +11,7 @@
   "sampler_power": 0.5,
   "train_check_size": 500,
   "exclude": [],
+  "issues": "results/data_issues.json",
   "seed": 0,
   "workers": 4,
   "device": "mps",
@@ -20,10 +21,12 @@
   "out": "results/runs",
   "run_name": "averaged_30",
   "torch": "2.15.0",
-  "parameters": 273987,
+  "parameters": 884147,
   "sequences": {
     "train": 4110,
     "train_check": 500,
     "val": 856
-  }
+  },
+  "linked_dropped": [],
+  "selected_by": "val_loss"
 }

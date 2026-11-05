@@ -11,8 +11,9 @@ import pytest
 import torch
 
 from check_data import find_anchor_frame_links, find_issues
+from check_shortcuts import PERTURBATIONS, colour_baseline, cover, main as shortcuts_main, position_accuracy
 from jersey.data import (
-    BLANK, IMAGE_SIZE, MAX_FRAMES, JerseyDataset, decode_label, encode_label, find_images,
+    AUGMENTS, BLANK, IMAGE_SIZE, MAX_FRAMES, JerseyDataset, decode_label, encode_label, find_images,
     filter_numbers, held_out_partners, linked_groups, make_sampler,
 )
 from jersey.engine import digit_loss, evaluate, train_one_epoch
@@ -243,10 +244,11 @@ def test_decode_label_rejects_blank_first_digit(second):
         decode_label(BLANK, second)
 
 
-def test_augment_is_same_for_every_frame(tmp_path):
+@pytest.mark.parametrize("policy", AUGMENTS)
+def test_augment_is_same_for_every_frame(tmp_path, policy):
     # Identical input frames must stay identical, or augmentation adds flicker real tracks lack.
     fake_sequence_dir(tmp_path, "4/p/0", [1, 2, 3], noise=True)
-    dataset = JerseyDataset(tmp_path, ["4/p/0"], augment=True, load_anchor=True)
+    dataset = JerseyDataset(tmp_path, ["4/p/0"], augment=True, load_anchor=True, policy=policy)
 
     item = dataset[0]
 
@@ -871,3 +873,56 @@ def test_map_similarity():
     assert map_similarity(a, a) == pytest.approx(1.0)
     assert map_similarity(a, -a) == pytest.approx(-1.0)
     assert math.isnan(map_similarity(a, torch.ones(12, 6)))
+
+
+@pytest.mark.parametrize("name", PERTURBATIONS)
+def test_perturbations_keep_shape_and_range(name):
+    images = torch.rand(2, 3, *IMAGE_SIZE)
+
+    changed = PERTURBATIONS[name](images)
+
+    assert changed.shape == images.shape
+    assert changed.min() >= 0 and changed.max() <= 1
+
+
+def test_torso_cover_and_only_torso_split_the_crop():
+    images = torch.rand(1, 3, *IMAGE_SIZE)
+
+    covered, kept = cover(images, torso=True), cover(images, torso=False)
+
+    # Every pixel is greyed out in exactly one of the two, and kept in the other.
+    assert torch.equal(torch.where(covered == images, covered, kept), images)
+    assert (covered != images).any() and (kept != images).any()
+
+
+def test_position_accuracy_scores_each_digit_and_the_number():
+    labels = torch.tensor([[4, BLANK], [4, 9], [8, 9], [6, BLANK]])
+    predictions = torch.tensor([[4, BLANK], [4, 8], [6, 9], [9, 6]])
+
+    found = position_accuracy(predictions, labels)
+
+    assert found == {"first_digit": 0.5, "second_digit": 0.5, "number": 0.25}
+
+
+def test_colour_baseline_finds_numbers_told_apart_by_colour(tmp_path):
+    for number, colour in (("4", "red"), ("8", "blue")):
+        for player in range(3):
+            folder = tmp_path / number / f"p{player}" / "0"
+            folder.mkdir(parents=True)
+            for name in ("1_1_0.png", "1_2_0.png", "1_0_0_anchor.png"):
+                Image.new("RGB", (22, 35), colour).save(folder / name)
+    ids = [f"{number}/p{player}/0" for number in ("4", "8") for player in range(3)]
+    loader = torch.utils.data.DataLoader(JerseyDataset(tmp_path, ids), batch_size=4)
+
+    predictions = colour_baseline(loader, loader, steps=50)
+
+    assert torch.equal(predictions, torch.tensor([[4, BLANK]] * 3 + [[8, BLANK]] * 3))
+
+
+def test_check_shortcuts_writes_scores_and_picture(tiny_runs):
+    shortcuts_main(["holdout", "--runs", str(tiny_runs), "--device", "cpu", "--workers", "0"])
+
+    report = json.loads((tiny_runs / "holdout" / "shortcuts_val.json").read_text())
+    assert report["sequences"] == 1  # val without the held-out 49
+    assert set(report["model"]) == set(PERTURBATIONS)
+    assert (tiny_runs / "holdout" / "shortcuts_val.png").exists()

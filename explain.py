@@ -1,5 +1,5 @@
 """Explain a trained run: one val sequence per number, with checks that the maps are faithful.
-Example: uv run explain.py results/runs/averaged_30
+Example: uv run explain.py results/runs/averaged_final
 
 Writes prediction.png and explain.json into the run folder, as train.py does at the end
 of a run, so older runs can be explained too. See jersey/explain.py for what they show.

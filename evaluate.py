@@ -1,5 +1,5 @@
 """Score finished runs on val, or once on test.
-Example: uv run evaluate.py averaged_30 pooled_30 full_30
+Example: uv run evaluate.py averaged_final full_final
 
 Two steps, as in the SoccerNet jersey task and the Koshkina & Elder (2024) pipeline:
 predict writes one row per sequence, and score turns rows into numbers. Every method
@@ -56,7 +56,7 @@ HOLD_OUT_SPLITS = {"val": ("train", "val"), "test": ("test",)}
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("names", nargs="+", help="run folders under --runs, e.g. full_30")
+    parser.add_argument("names", nargs="+", help="run folders under --runs, e.g. full_final")
     parser.add_argument("--split", choices=("val", "test"), default="val")
     parser.add_argument("--runs", type=Path, default=Path("results/runs"))
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")

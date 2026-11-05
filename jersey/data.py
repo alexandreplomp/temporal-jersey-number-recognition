@@ -30,10 +30,44 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 # No flips: a mirrored digit is a different or invalid digit.
-AUGMENT = v2.Compose([
-    v2.RandomAffine(degrees=5, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-    v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
-])
+GEOMETRY = v2.RandomAffine(degrees=5, translate=(0.1, 0.1), scale=(0.9, 1.1))
+AUGMENTS = {
+    # The first policy: mild geometry and colour, so every kit keeps its own colour.
+    "basic": v2.Compose([
+        GEOMETRY,
+        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.05),
+    ]),
+    # Colour predicts the number in this data: a linear classifier on the colours of the whole
+    # crop (kit, pitch, light) gets about 65% of val numbers right (check_shortcuts.py). A
+    # digit's shape does not depend on colour, so every sample gets a random hue from the
+    # whole colour wheel. Natural colours then come up only by chance, so an untouched-looking
+    # scene (green grass) no longer tells the model that the kit colour can be trusted.
+    # On top: swapped channels, grey, or inverted, since digits come light on dark and dark
+    # on light. Evaluation keeps the natural colours.
+    # Blur and noise helped scene text recognition most (Atienza 2021). The crops are
+    # upscaled about 2.5x, so blur, low resolution and JPEG are set at the original scale:
+    # sigma up to 3.5 is about 1.5 original pixels, width 19-38 is 0.5-1x the original width
+    # of about 38, and JPEG runs at half size, about the original. Noise is left out to keep
+    # every frame of a sequence identical, though real frames differ in noise.
+    # Geometry stays mild: stronger cropping raises texture bias (Hermann et al. 2020).
+    "strong": v2.Compose([
+        GEOMETRY,
+        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.5),
+        v2.RandomApply([v2.RandomChannelPermutation()], p=0.3),
+        v2.RandomGrayscale(p=0.2),
+        v2.RandomInvert(p=0.1),
+        # One at a time: stacking many stopped helping in Atienza 2021.
+        v2.RandomApply([v2.RandomChoice([
+            v2.GaussianBlur(kernel_size=21, sigma=(0.1, 3.5)),
+            v2.Compose([v2.RandomResize(19, 39, antialias=True), v2.Resize(IMAGE_SIZE, antialias=True)]),
+            v2.Compose([
+                v2.Resize((IMAGE_SIZE[0] // 2, IMAGE_SIZE[1] // 2), antialias=True),
+                v2.JPEG(quality=(40, 90)),
+                v2.Resize(IMAGE_SIZE, antialias=True),
+            ]),
+        ])], p=0.5),
+    ]),
+}
 # ImageNet statistics, because the CNN starts from ImageNet weights.
 NORMALIZE = v2.Compose([
     v2.ToDtype(torch.float32, scale=True),
@@ -184,7 +218,7 @@ def make_sampler(sequence_ids: list[str], power: float = 0.5) -> WeightedRandomS
 class JerseyDataset(Dataset):
     """Sequences as fixed-size tensors, labelled by their number folder.
 
-    augment picks frames at random and augments them, for training.
+    augment picks frames at random and augments them with the policy from AUGMENTS, for training.
     load_anchor adds the anchor, for training and the anchor-only baseline.
     Both off gives the repeatable input used for evaluation.
 
@@ -207,11 +241,13 @@ class JerseyDataset(Dataset):
         load_anchor: bool = False,
         max_frames: int = MAX_FRAMES,
         image_size: tuple[int, int] = IMAGE_SIZE,
+        policy: str = "strong",
     ):
         data_dir = Path(data_dir)
         self.sequence_ids = list(sequence_ids)
         self.samples = [_index_sequence(data_dir, sequence_id) for sequence_id in self.sequence_ids]
         self.augment = augment
+        self.transform = AUGMENTS[policy]
         self.load_anchor = load_anchor
         self.max_frames = max_frames
         self.resize = v2.Resize(image_size, antialias=True)
@@ -229,7 +265,7 @@ class JerseyDataset(Dataset):
         images = torch.stack([_load_image(path, self.resize) for path in paths])
         if self.augment:
             # One call on the whole stack, so every frame and the anchor get the same augmentation.
-            images = AUGMENT(images)
+            images = self.transform(images)
         images = NORMALIZE(images)
 
         if self.load_anchor:

@@ -40,7 +40,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid, save_image
 
-from jersey.data import MAX_FRAMES, JerseyDataset, denormalize, filter_numbers, held_out_partners, make_sampler
+from jersey.data import AUGMENTS, MAX_FRAMES, JerseyDataset, denormalize, filter_numbers, held_out_partners, make_sampler
 from jersey.engine import ANCHOR_WEIGHT, evaluate, train_one_epoch
 from jersey.explain import explain_run
 from jersey.metrics import (
@@ -70,6 +70,8 @@ def parse_args(argv=None):
     parser.add_argument("--anchor-weight", type=float, default=ANCHOR_WEIGHT)
     parser.add_argument("--max-frames", type=int, default=MAX_FRAMES,
                         help="1 gives the single-frame baseline")
+    parser.add_argument("--augment", choices=tuple(AUGMENTS), default="strong",
+                        help="basic keeps kit colours, strong scrambles colour and adds blur (see data.py)")
     parser.add_argument("--sampler-power", type=float, default=0.5,
                         help="0 keeps the data as it is, 1 balances numbers fully")
     parser.add_argument("--train-check-size", type=int, default=500)
@@ -163,8 +165,8 @@ def main(argv=None):
     def dataset(ids, **options):
         return JerseyDataset(args.data, ids, max_frames=args.max_frames, **options)
 
-    train_loader = make_loader(dataset(train_ids, augment=True, load_anchor=True), args, device,
-                               sampler=make_sampler(train_ids, args.sampler_power))
+    train_loader = make_loader(dataset(train_ids, augment=True, load_anchor=True, policy=args.augment),
+                               args, device, sampler=make_sampler(train_ids, args.sampler_power))
     check_loader = make_loader(dataset(check_ids), args, device)
     val_loader = make_loader(dataset(val_ids), args, device)
 

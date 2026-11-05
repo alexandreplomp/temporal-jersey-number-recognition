@@ -23,8 +23,9 @@ uv run train.py --variant full   # trains one model, writes results/runs/<varian
 ```
 
 ```bash
-uv run evaluate.py averaged_30 pooled_30 full_30   # scores runs on val, writes results/results_val.csv
-uv run explain.py results/runs/full_30             # prediction.png for an existing run
+uv run evaluate.py averaged_final full_final   # scores runs on val, writes results/results_val.csv
+uv run explain.py results/runs/full_final      # prediction.png for an existing run
+uv run check_shortcuts.py averaged_final      # val accuracy without colour or without the number area
 ```
 
 `evaluate.py` scores three methods per run the same way: the sequence model, the anchor alone, and a
@@ -37,7 +38,8 @@ since the others were already seen while developing.
 
 `uv run train.py --help` lists the settings. The best epoch is always the one with the lowest val loss
 (saved as `selected_by` in `config.json`), and val two-digit accuracy is reported beside it, since the loss
-is dominated by one-digit numbers. Its per-number val scores, with 95% intervals, go to `per_number.json` in the run folder. Use `--schedule onecycle` for final runs and
+is dominated by one-digit numbers. Its per-number val scores, with 95% intervals, go to `per_number.json` in the run folder. `--augment strong` (the default) scrambles colour, since colour predicts the number in this data (see `check_shortcuts.py`);
+`--augment basic` is the earlier, colour-keeping policy, for comparison. Use `--schedule onecycle` for final runs and
 `--max-frames 1 --variant averaged` for the single-frame baseline.
 
 `results/splits.json` is committed, so you only need to rerun the two scripts if the data changes.

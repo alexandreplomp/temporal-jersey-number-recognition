@@ -47,15 +47,16 @@ class DigitQueries(nn.Module):
         super().__init__()
         self.queries = nn.Parameter(torch.randn(1, 2, dim) * 0.02)
         # Attention treats the cells as an unordered set. A learned position per cell
-        # is what lets the queries tell left from right.
+        # is what lets the queries tell left from right. It goes into the keys only, as in
+        # DETR: it decides where a query looks, but is kept out of what the token carries.
         self.cell_positions = nn.Parameter(torch.randn(1, num_cells, dim) * 0.02)
         self.attention = nn.MultiheadAttention(dim, HEADS, batch_first=True)
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, cells):
-        cells = cells + self.cell_positions  # (N, C, D)
         queries = self.queries.expand(len(cells), -1, -1)  # (N, 2, D)
-        digits, attention = self.attention(queries, cells, cells)  # (N, 2, D), (N, 2, C)
+        # (N, 2, D), (N, 2, C); cells (N, C, D)
+        digits, attention = self.attention(queries, cells + self.cell_positions, cells)
         # Kept to show where each query looks, averaged over the heads.
         self.last_attention = attention.detach()
         return self.norm(digits)

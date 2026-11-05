@@ -26,14 +26,9 @@ data/
 # Keep review artifacts local for now
 /review/
 
-# Early smoke runs; retain the main experiments and their trained weights
-/results/runs/FIRST_TEST/
-/results/runs/SECOND_TEST_AVERAGE/
-
-# Regenerable image grids; keep one representative explanation and all curves
+# Regenerable image grids; keep all curves
 /results/runs/*/train_batch.png
 /results/runs/*/prediction.png
-!/results/runs/full_30/prediction.png
 
 # Source, tests, dependency locks, split/data-issue manifests, result tables,
 # main-run configs/metrics/predictions, and final reports remain available to commit.

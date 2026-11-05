@@ -32,6 +32,12 @@ BACKBONE_BLOCKS = 9
 BACKBONE_CHANNELS = 48
 BACKBONE_STRIDE = 16
 HEADS = 4
+# Each digit query starts on its own side: a soft bias on its attention scores that
+# falls off with the distance from a point left (first digit) or right (second digit)
+# of the middle. Fixed, so the start cannot drift back to the middle. In pixels of the
+# input, so the bias sits in the same place on the digits whatever the grid.
+SIDE_OFFSET = 8
+SIDE_WIDTH = 12
 
 
 def make_backbone(pretrained):
@@ -43,23 +49,40 @@ def make_backbone(pretrained):
 class DigitQueries(nn.Module):
     """Two learned queries search a frame's cells: one for the first digit, one for the second."""
 
-    def __init__(self, dim, num_cells):
+    def __init__(self, dim, grid):
         super().__init__()
+        rows, columns = grid
         self.queries = nn.Parameter(torch.randn(1, 2, dim) * 0.02)
         # Attention treats the cells as an unordered set. A learned position per cell
         # is what lets the queries tell left from right. It goes into the keys only, as in
         # DETR: it decides where a query looks, but is kept out of what the token carries.
-        self.cell_positions = nn.Parameter(torch.randn(1, num_cells, dim) * 0.02)
+        self.cell_positions = nn.Parameter(torch.randn(1, rows * columns, dim) * 0.02)
+        self.register_buffer("side_bias", side_bias(rows, columns), persistent=False)
         self.attention = nn.MultiheadAttention(dim, HEADS, batch_first=True)
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, cells):
         queries = self.queries.expand(len(cells), -1, -1)  # (N, 2, D)
-        # (N, 2, D), (N, 2, C); cells (N, C, D)
-        digits, attention = self.attention(queries, cells + self.cell_positions, cells)
+        # (N, 2, D), (N, 2, C); cells (N, C, D). A float attn_mask is added to the scores.
+        digits, attention = self.attention(
+            queries, cells + self.cell_positions, cells, attn_mask=self.side_bias,
+        )
         # Kept to show where each query looks, averaged over the heads.
         self.last_attention = attention.detach()
         return self.norm(digits)
+
+
+def side_bias(rows, columns, stride=BACKBONE_STRIDE):
+    """Bias on the attention scores of the two digit queries: (2, rows * columns).
+
+    0 at the query's own centre, -(distance / SIDE_WIDTH)^2 / 2 elsewhere, with the
+    distance in pixels from the middle of each column of cells.
+    """
+    middle = columns * stride / 2
+    centres = torch.tensor([middle - SIDE_OFFSET, middle + SIDE_OFFSET])  # first left, second right
+    x = (torch.arange(columns, dtype=torch.float) + 0.5) * stride  # (columns,) cell centres
+    bias = -((x - centres[:, None]) / SIDE_WIDTH) ** 2 / 2  # (2, columns)
+    return bias[:, None, :].expand(2, rows, columns).reshape(2, rows * columns)
 
 
 def masked_mean(tokens, mask):
@@ -131,8 +154,8 @@ class JerseyModel(nn.Module):
         self.freeze_batchnorm = pretrained
         self.backbone = make_backbone(pretrained)
         self.project = nn.Conv2d(BACKBONE_CHANNELS, dim, kernel_size=1)
-        num_cells = (image_size[0] // BACKBONE_STRIDE) * (image_size[1] // BACKBONE_STRIDE)
-        self.digits = DigitQueries(dim, num_cells)
+        grid = (image_size[0] // BACKBONE_STRIDE, image_size[1] // BACKBONE_STRIDE)
+        self.digits = DigitQueries(dim, grid)
         # Only build what this variant uses, so parameter counts compare fairly.
         self.temporal = TemporalEncoder(dim, max_frames, dropout) if variant == "full" else None
         self.pool = AttentionPool(dim) if variant in ("pooled", "full") else None

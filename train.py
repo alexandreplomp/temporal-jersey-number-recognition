@@ -24,7 +24,8 @@ This rule is fixed and saved in config.json as selected_by. Val loss is dominate
 common one-digit numbers, so val two-digit accuracy is always reported beside it.
 
 --reader two-step trains the two-step reader (jersey/model.py) in two stages:
-    stage 1  --no-real-pairs --synthetic-pairs 0.5: singles and spliced pairs only, the best
+    stage 1  --no-real-pairs --synthetic-pairs 0.4 --synthetic-singles 0.4: singles, spliced pairs
+             and pasted singles only (so a paste does not mean two digits), the best
              epoch by the highest pair_accuracy on --val-pairs (jersey/pair_check.py), since
              val loss has hardly any two-digit numbers to judge reading digit by digit
     stage 2  --init-from <stage 1 run>: all real data at lower rates, best by val loss
@@ -97,7 +98,10 @@ def parse_args(argv=None):
     parser.add_argument("--synthetic-pairs", type=float, default=0.0,
                         help="share of single-digit training samples spliced into two-digit ones (jersey/pairs.py)")
     parser.add_argument("--pairs", type=Path, default=Path("results/pairs/strips.json"),
-                        help="make_pairs.py --split train output, read only with --synthetic-pairs")
+                        help="make_pairs.py --split train output, read only with --synthetic-pairs or -singles")
+    parser.add_argument("--synthetic-singles", type=float, default=0.0,
+                        help="share of single-digit training samples given a partner's digit pasted alone, labelled"
+                             " one digit, so a pasted patch does not mean two digits (jersey/pairs.py)")
     parser.add_argument("--no-real-pairs", action="store_true",
                         help="train without real two-digit sequences (stage 1); picks the best epoch by pair_accuracy")
     parser.add_argument("--val-pairs", type=Path,
@@ -187,7 +191,8 @@ def load_pairs(args, exclude, train_ids):
     outside = set(bank.sequence_ids()) - set(train_ids)
     if outside:
         raise ValueError(f"{args.pairs} has {len(outside)} sequences outside this run's train split, e.g. {min(outside)}")
-    print(f"splicing {args.synthetic_pairs:.0%} of single-digit samples, {len(bank.sequence_ids())} sequences "
+    print(f"splicing {args.synthetic_pairs:.0%} of single-digit samples into pairs and pasting "
+          f"{args.synthetic_singles:.0%} as singles, {len(bank.sequence_ids())} sequences "
           f"located by {bank.locator}")
     return bank
 
@@ -239,7 +244,8 @@ def main(argv=None):
         raise ValueError("--no-real-pairs picks the best epoch by pair_accuracy, so it needs --val-pairs")
     selected_by = SELECTED_BY_NO_REAL_PAIRS if args.no_real_pairs else SELECTED_BY
     higher_wins = selected_by == SELECTED_BY_NO_REAL_PAIRS
-    pairs = load_pairs(args, exclude, train_ids) if args.synthetic_pairs > 0 else None
+    pasting = args.synthetic_pairs > 0 or args.synthetic_singles > 0
+    pairs = load_pairs(args, exclude, train_ids) if pasting else None
     pair_set = None
     if args.val_pairs is not None:
         pair_set = build_pair_set(args.val_pairs, val_ids, exclude, args.data, seed=args.seed)
@@ -249,7 +255,8 @@ def main(argv=None):
         return JerseyDataset(args.data, ids, max_frames=args.max_frames, **options)
 
     train_set = dataset(train_ids, augment=True, load_anchor=True, policy=args.augment,
-                        pairs=pairs, pair_share=args.synthetic_pairs, real_pairs=not args.no_real_pairs)
+                        pairs=pairs, pair_share=args.synthetic_pairs, real_pairs=not args.no_real_pairs,
+                        single_share=args.synthetic_singles)
     # The sequences actually trained on, so sampler, train-check and shot bands agree with the dataset.
     fit_ids = train_set.sequence_ids
     picked = torch.randperm(len(fit_ids), generator=torch.Generator().manual_seed(args.seed))
@@ -321,7 +328,7 @@ def main(argv=None):
             return ""
         return (f"  pairs {entry['pair_accuracy']:.3f} second right {entry['second_is_right']:.3f}"
                 f" left {entry['second_is_left']:.3f} gap {entry['left_right_gap']:.2f}"
-                f" singles {entry['singles_accuracy']:.3f}")
+                f" singles {entry['singles_accuracy']:.3f} pasted singles {entry['pasted_singles_accuracy']:.3f}")
 
     # Before training the model should guess about uniformly. A loss far from
     # UNIFORM_LOSS points to a bug in the init, the labels or the loss (Karpathy's recipe).

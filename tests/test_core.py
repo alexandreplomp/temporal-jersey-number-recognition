@@ -31,7 +31,7 @@ from jersey.model import (
     BACKBONE_STRIDE, CELL_STRIDE, LOCAL_BLOCKS, READERS, VARIANTS, JerseyModel, compose, load_run, predict_digits,
     side_bias,
 )
-from jersey.pairs import FEATHER, MIN_KEPT, StripBank, splice
+from jersey.pairs import FEATHER, MIN_KEPT, StripBank, paste_single, splice
 from make_pairs import MIN_PROB, ink_box, keep, main as pairs_main
 from make_splits import SPLITS, flagged_players, make_splits
 from evaluate import main as evaluate_main, prefix_answers, score, vote
@@ -1362,7 +1362,7 @@ def two_step_runs(tmp_path_factory):
         "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--issues", str(root / "data_issues.json"),
         "--out", str(root / "runs"), "--exclude", "49", "--pairs", str(train_strips), "--val-pairs", str(val_strips),
     ]
-    train_main([*common, "--run-name", "s1", "--no-real-pairs", "--synthetic-pairs", "0.5"])
+    train_main([*common, "--run-name", "s1", "--no-real-pairs", "--synthetic-pairs", "0.4", "--synthetic-singles", "0.4"])
     train_main([*common, "--run-name", "s2", "--init-from", "s1", "--synthetic-pairs", "0.3"])
     return root
 
@@ -1374,6 +1374,7 @@ def test_stage_one_trains_without_real_pairs_and_picks_by_pair_accuracy(two_step
 
     assert config["reader"] == "two-step" and config["selected_by"] == "pair_accuracy" and config["selected_highest"]
     assert config["sequences"]["train"] == 3  # 4, 9 and 8: not the real 89, nor the held-out 49
+    assert config["synthetic_singles"] == 0.4
     assert all({"pair_accuracy", "second_is_right", "second_is_left", "left_right_gap", "singles_accuracy"} <= set(entry)
                for entry in history["epochs"])
     highest = max(history["epochs"][1:], key=lambda entry: entry["pair_accuracy"])
@@ -1435,6 +1436,8 @@ def test_pair_set_uses_validation_players_only_and_never_a_held_out_number(two_s
     assert {sequence for pair in found["sequences"] for sequence in pair} <= set(val_ids)
     assert torch.equal(found["images"], again["images"])  # a fixed set
     assert found["single_labels"][:, 1].eq(BLANK).all()
+    assert found["pasted"].shape == found["images"].shape and found["pasted_labels"][:, 1].eq(BLANK).all()
+    assert torch.equal(found["pasted_labels"][:, 0], torch.tensor([int(b.split("/")[0]) for _, b in found["sequences"]]))
     with pytest.raises(ValueError, match="val boxes only"):
         build_pair_set(root / "train_strips.json", val_ids, ("49",), root / "data")
     with pytest.raises(ValueError, match="outside val"):
@@ -1451,7 +1454,8 @@ def test_pair_metrics_for_either_reader(two_step_runs, reader):
 
     found = pair_metrics(model, pair_set, "cpu")
 
-    assert set(found) == {"pair_accuracy", "second_is_right", "second_is_left", "left_right_gap", "singles_accuracy"}
+    assert set(found) == {"pair_accuracy", "second_is_right", "second_is_left", "left_right_gap", "singles_accuracy",
+                          "pasted_singles_accuracy"}
     assert found["second_is_right"] + found["second_is_left"] <= 1  # the two digits differ
     assert math.isfinite(found["left_right_gap"])
 
@@ -1466,3 +1470,70 @@ def test_train_refuses_val_boxes_for_training(tiny_runs, tmp_path):
             "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--out", str(tmp_path / "runs"),
             "--synthetic-pairs", "0.5", "--pairs", str(bank),
         ])
+
+
+# --- Pasted singles: a paste must not mean two digits ---------------------------------------------
+
+def test_paste_single_covers_a_with_b_alone_and_is_as_wide_as_a_pair():
+    a = digit_image()  # white digit on black
+    b_box = [30, 60, 40, 80]
+    b = digit_image(b_box, ink=200, shirt=100)
+    a_centre = (DIGIT_BOX[0] + DIGIT_BOX[2]) / 2
+
+    image, box = paste_single(a, DIGIT_BOX, b, b_box, gap=3)
+
+    assert image.shape == a.shape and image.dtype == torch.uint8 and box.shape == (4,)
+    assert not image.eq(255).all(dim=0).any()  # A's white digit is gone
+    assert (box[0] + box[2]) / 2 == pytest.approx(a_centre, abs=1)  # B's digit where A's was
+    assert box[3] - box[1] == pytest.approx(DIGIT_BOX[3] - DIGIT_BOX[1], abs=1)  # scaled to A's height
+    l, t, r, b_ = (round(v) for v in box.tolist())
+    assert image[:, t + 2:b_ - 2, l + 2:r - 2].sub(200).abs().le(2).all()
+
+    # On a shirt shaded across, any moved or pasted strip changes pixels, so the changed columns
+    # are the whole patch (on a flat shirt, a pair's own strip would look unchanged).
+    shaded = a.clone()
+    shaded[:, :, :] = (torch.arange(IMAGE_SIZE[1]) * 2).to(torch.uint8)
+    shaded[:, DIGIT_BOX[1]:DIGIT_BOX[3], DIGIT_BOX[0]:DIGIT_BOX[2]] = 255
+
+    def patch_width(found):
+        columns = (found.int() - shaded.int()).abs().sum(dim=0).gt(0).any(dim=0).nonzero()
+        return columns.max().item() - columns.min().item() + 1
+
+    single_width = patch_width(paste_single(shaded, DIGIT_BOX, b, b_box, gap=3)[0])
+    pair_width = patch_width(splice(shaded, DIGIT_BOX, b, b_box, True, gap=3)[0])
+    assert single_width == pytest.approx(pair_width, abs=3)  # its size gives no count away
+
+
+def test_blend_width_changes_the_seam_but_hardly_the_boxes():
+    a, b = digit_image(), digit_image([30, 60, 40, 80], ink=200, shirt=100)
+
+    narrow, narrow_boxes = splice(a, DIGIT_BOX, b, [30, 60, 40, 80], True, gap=3, feather=2)
+    wide, wide_boxes = splice(a, DIGIT_BOX, b, [30, 60, 40, 80], True, gap=3, feather=5)
+
+    assert torch.allclose(narrow_boxes, wide_boxes, atol=1) and not torch.equal(narrow, wide)  # rounding: 1 px
+
+
+def test_dataset_pastes_the_partners_digit_alone_without_boxes(tmp_path):
+    kept = {"4/a/0": 3, "9/c/0": 3}
+    for sequence_id in kept:
+        fake_sequence_dir(tmp_path / "data", sequence_id, [1, 2, 3], noise=True)
+    bank = StripBank(fake_strips(tmp_path / "strips.json", kept, exclude=("49",)))
+    dataset = JerseyDataset(tmp_path / "data", list(kept), augment=True, load_anchor=True, max_frames=4,
+                            pairs=bank, single_share=1.0)
+    torch.manual_seed(0)
+
+    items = [(sequence_id, dataset[i]) for i, sequence_id in enumerate(dataset.sequence_ids) for _ in range(4)]
+
+    assert all(decode_label(*item["label"].tolist()) == ("9" if sequence_id[0] == "4" else "4") for sequence_id, item in items)
+    assert not any(item["has_boxes"] for _, item in items)  # the attention loss teaches left and right only
+    with pytest.raises(ValueError, match="more than 1"):
+        JerseyDataset(tmp_path / "data", list(kept), pairs=bank, pair_share=0.6, single_share=0.6)
+
+
+def test_single_partner_never_pastes_a_held_out_number(tmp_path):
+    bank = StripBank(fake_strips(tmp_path / "strips.json", {"4/a/0": 3, "9/c/0": 3, "8/e/0": 3}, exclude=("9",)))
+    torch.manual_seed(0)
+
+    partners = {bank.single_partner("4/a/0").split("/")[0] for _ in range(30)}
+
+    assert partners == {"8"}  # a 9 alone is held out here

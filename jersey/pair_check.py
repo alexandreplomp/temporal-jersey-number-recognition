@@ -11,6 +11,9 @@ digit in position 1 and the right digit in position 2:
     left_right_gap    columns between where the second and the first position look (attention
                       centroids); about 0 when both look at the same place
     singles_accuracy  the unspliced first image of each pair, read as a one-digit number
+    pasted_singles_accuracy
+                      the partner's digit pasted alone over the first image, read as a one-digit
+                      number: low while the count still takes a pasted patch for two digits
 
 Only validation players' boxes (make_pairs.py --split val) are used, never a held-out
 number is made, and the set is drawn once with a fixed seed, so every epoch and every run
@@ -24,7 +27,7 @@ from torchvision.transforms import v2
 
 from jersey.data import BLANK, IMAGE_SIZE, NORMALIZE, _load_image
 from jersey.model import CELL_STRIDE, predict_digits
-from jersey.pairs import GAP, StripBank, splice
+from jersey.pairs import GAP, StripBank, paste_single, splice
 
 PAIR_COUNT = 300
 TRIES_PER_PAIR = 20
@@ -34,7 +37,9 @@ def build_pair_set(strips_path, val_ids, exclude, data_dir, count=PAIR_COUNT, se
     """Spliced images of two different digits and their unspliced first images, drawn with seed.
 
     Returns a dict: images (N, 3, H, W) uint8, labels (N, 2), boxes (N, 2, 4), singles
-    (N, 3, H, W) uint8, single_labels (N, 2), and the sequence ids used.
+    (N, 3, H, W) uint8, single_labels (N, 2), pasted (N, 3, H, W) uint8, pasted_labels (N, 2),
+    and the sequence ids used. The pasted singles take no random draws, so the pairs are the
+    same as before they were added.
 
     Raises:
         ValueError: the boxes are not validation boxes, include a sequence outside val_ids,
@@ -53,7 +58,8 @@ def build_pair_set(strips_path, val_ids, exclude, data_dir, count=PAIR_COUNT, se
     generator = torch.Generator().manual_seed(seed)
     resize = v2.Resize(IMAGE_SIZE, antialias=True)
     ids = bank.sequence_ids()
-    found = {"images": [], "labels": [], "boxes": [], "singles": [], "single_labels": [], "sequences": []}
+    found = {"images": [], "labels": [], "boxes": [], "singles": [], "single_labels": [], "pasted": [],
+             "pasted_labels": [], "sequences": []}
     for _ in range(count * TRIES_PER_PAIR):
         if len(found["images"]) == count or not ids:
             break
@@ -66,7 +72,8 @@ def build_pair_set(strips_path, val_ids, exclude, data_dir, count=PAIR_COUNT, se
         b_name, b_box = _draw(bank.frames[partner_id], generator)
         gap = torch.randint(GAP[0], GAP[1] + 1, (), generator=generator).item()
         a_image = _load_image(Path(data_dir) / a_name, resize)
-        image, boxes = splice(a_image, a_box, _load_image(Path(data_dir) / b_name, resize), b_box, a_left, gap)
+        b_image = _load_image(Path(data_dir) / b_name, resize)
+        image, boxes = splice(a_image, a_box, b_image, b_box, a_left, gap)
         digit, other = int(sequence_id.split("/")[0]), int(partner_id.split("/")[0])
         label = (digit, other) if a_left else (other, digit)
         assert f"{label[0]}{label[1]}" not in exclude
@@ -75,6 +82,8 @@ def build_pair_set(strips_path, val_ids, exclude, data_dir, count=PAIR_COUNT, se
         found["boxes"].append(boxes)
         found["singles"].append(a_image)
         found["single_labels"].append((digit, BLANK))
+        found["pasted"].append(paste_single(a_image, a_box, b_image, b_box, gap)[0])
+        found["pasted_labels"].append((other, BLANK))
         found["sequences"].append((sequence_id, partner_id))
     if not found["images"]:
         raise ValueError(f"{strips_path} gives no pairs of two different digits")
@@ -84,6 +93,8 @@ def build_pair_set(strips_path, val_ids, exclude, data_dir, count=PAIR_COUNT, se
         "boxes": torch.stack(found["boxes"]),
         "singles": torch.stack(found["singles"]),
         "single_labels": torch.tensor(found["single_labels"]),
+        "pasted": torch.stack(found["pasted"]),
+        "pasted_labels": torch.tensor(found["pasted_labels"]),
         "sequences": found["sequences"],
     }
 
@@ -113,6 +124,7 @@ def pair_metrics(model, pair_set, device, batch_size=64):
     columns = IMAGE_SIZE[1] // CELL_STRIDE
     column_of_cell = torch.arange(attention.shape[-1]) % columns
     centroids = (attention * column_of_cell).sum(dim=-1)  # (N, 2)
+    pasted, _ = _read(model, pair_set["pasted"], device, batch_size)
     singles, _ = _read(model, pair_set["singles"], device, batch_size)
     return {
         "pair_accuracy": (digits == labels).all(dim=1).float().mean().item(),
@@ -120,4 +132,5 @@ def pair_metrics(model, pair_set, device, batch_size=64):
         "second_is_left": (digits[:, 1] == labels[:, 0]).float().mean().item(),
         "left_right_gap": (centroids[:, 1] - centroids[:, 0]).mean().item(),
         "singles_accuracy": (singles == pair_set["single_labels"]).all(dim=1).float().mean().item(),
+        "pasted_singles_accuracy": (pasted == pair_set["pasted_labels"]).all(dim=1).float().mean().item(),
     }

@@ -22,6 +22,7 @@ Writes to --out:
     strips.png    PICTURE_COUNT kept images with their box, for counting by eye
     rejected.png  rejected images with their box (red), to see what the checks throw away
     spliced.png   spliced frames as training sees them before augmentation (jersey/pairs.py)
+    pasted.png    pasted one-digit frames (train.py --synthetic-singles), the same way
 """
 
 from collections import Counter, defaultdict
@@ -41,7 +42,7 @@ from jersey.data import (
 )
 from jersey.local_reader import crop_scores, load_locator, torso_cells
 from jersey.model import CELL_STRIDE
-from jersey.pairs import GAP, StripBank, splice
+from jersey.pairs import FEATHERS, GAP, StripBank, paste_single, splice
 from train import pick_device
 
 MIN_PROB = 0.9
@@ -293,6 +294,31 @@ def save_spliced_picture(data_dir, bank, path, count=48):
     figure.savefig(path, dpi=110)
 
 
+def save_pasted_picture(data_dir, bank, path, count=48):
+    """First frame of a spread of usable sequences with a partner's digit pasted alone, and its box."""
+    resize = v2.Resize(IMAGE_SIZE, antialias=True)
+    picks = _spread(bank.sequence_ids(), count)
+    figure, rows, columns = _grid(len(picks))
+    shown = 0
+    for sequence_id in picks:
+        partner_id = bank.single_partner(sequence_id)
+        if partner_id is None:
+            continue
+        (a_name, a_box), (b_name, b_box) = bank.frames[sequence_id][0], bank.frames[partner_id][0]
+        gap = torch.randint(GAP[0], GAP[1] + 1, ()).item()
+        feather = torch.randint(FEATHERS[0], FEATHERS[1] + 1, ()).item()
+        image, box = paste_single(_load_image(Path(data_dir) / a_name, resize), a_box,
+                                  _load_image(Path(data_dir) / b_name, resize), b_box, gap, feather)
+        shown += 1
+        axis = figure.add_subplot(rows, columns, shown)
+        _show(axis, image, f"{partner_id.split('/')[0]}  (on {sequence_id.split('/')[0]})")
+        left, top, right, bottom = box.tolist()
+        axis.add_patch(Rectangle((left - 0.5, top - 0.5), right - left, bottom - top, fill=False,
+                                 linewidth=0.6, edgecolor="red"))
+    figure.tight_layout()
+    figure.savefig(path, dpi=110)
+
+
 def main(argv=None):
     args = parse_args(argv)
     torch.manual_seed(0)  # partner draws for spliced.png
@@ -326,6 +352,7 @@ def main(argv=None):
     save_boxes_picture(config["data"], [image for image in images if image["kept"]], args.out / "strips.png")
     save_boxes_picture(config["data"], [image for image in images if not image["kept"]], args.out / "rejected.png", 48)
     save_spliced_picture(config["data"], bank, args.out / "spliced.png")
+    save_pasted_picture(config["data"], bank, args.out / "pasted.png")
     print(json.dumps(summary, indent=2))
 
 

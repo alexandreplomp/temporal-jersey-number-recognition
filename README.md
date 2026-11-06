@@ -55,6 +55,12 @@ uv run train.py --exclude 49 --synthetic-pairs 0.3 --schedule onecycle --epochs 
 Check `results/pairs/strips.png` (the boxes) and `spliced.png` (spliced frames) before training. Training stops
 if the bank could splice a held-out number, so build it with a run that held out the same numbers.
 
+A pasted patch is itself a cue: if only two-digit samples have one, the model learns "pasted means two
+digits" (two_step_s2_ex49 reads pasted single digits right 45% of the time against 83% unpasted).
+`--synthetic-singles` pastes a partner's digit alone, the same way and as wide, labelled as one digit, and
+the blend width varies per sequence for both kinds. Use the same share for both, e.g.
+`--synthetic-pairs 0.4 --synthetic-singles 0.4`. The pair metric's `pasted_singles_accuracy` checks it.
+
 `results/splits.json` is committed, so you only need to rerun the two scripts if the data changes.
 
 ## Results

@@ -19,7 +19,7 @@ from torch.utils.data import Dataset, WeightedRandomSampler
 from torchvision import tv_tensors
 from torchvision.transforms import v2
 
-from jersey.pairs import GAP, splice
+from jersey.pairs import FEATHERS, GAP, paste_single, splice
 
 IMAGE_SUFFIXES = {".jpg", ".png"}
 # Height, width. Crops are about 87 x 38 pixels (median), about 2.3:1, so 2:1 stretches
@@ -238,8 +238,10 @@ class JerseyDataset(Dataset):
     load_anchor adds the anchor, for training and the anchor-only baseline.
     Both off gives the repeatable input used for evaluation.
     pairs (a jersey.pairs.StripBank) with augment turns a share pair_share of the single-digit
-    sequences into two-digit ones, spliced with a kit-near partner before augmentation. Without
-    augment nothing is spliced, so validation and evaluation see real sequences only.
+    sequences into two-digit ones, spliced with a kit-near partner before augmentation, and a
+    share single_share into pasted one-digit ones: the partner's digit pasted alone the same
+    way, so a pasted patch does not mean two digits (jersey/pairs.py). Without augment nothing
+    is pasted, so validation and evaluation see real sequences only.
     real_pairs=False drops the real two-digit sequences (stage 1 of the two-step reader).
 
     Each item is a dict with:
@@ -249,7 +251,7 @@ class JerseyDataset(Dataset):
         sequence_id  "number/player/sequence", for reviewing errors
         boxes        (max_frames, 2, 4), [left, top, right, bottom] of each digit in reading order,
                      after augmentation; zero unless has_boxes
-        has_boxes    (), True for spliced sequences, whose digit boxes are known
+        has_boxes    (), True for spliced pairs, whose two digit boxes are known
         anchor       (3, H, W), only with load_anchor
         anchor_boxes (2, 4), only with load_anchor
 
@@ -269,7 +271,10 @@ class JerseyDataset(Dataset):
         pairs=None,
         pair_share: float = 0.0,
         real_pairs: bool = True,
+        single_share: float = 0.0,
     ):
+        if pair_share + single_share > 1:
+            raise ValueError(f"pair_share {pair_share} + single_share {single_share} is more than 1")
         self.data_dir = Path(data_dir)
         self.sequence_ids = [
             sequence_id for sequence_id in sequence_ids if real_pairs or len(sequence_id.split("/")[0]) == 1
@@ -282,14 +287,17 @@ class JerseyDataset(Dataset):
         self.resize = v2.Resize(image_size, antialias=True)
         self.pairs = pairs
         self.pair_share = pair_share
+        self.single_share = single_share
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
         spliced = None
-        if self.augment and self.pairs is not None and torch.rand(()).item() < self.pair_share:
-            spliced = self._splice(self.sequence_ids[index])
+        if self.augment and self.pairs is not None:
+            draw = torch.rand(()).item()
+            if draw < self.pair_share + self.single_share:
+                spliced = self._splice(self.sequence_ids[index], single=draw >= self.pair_share)
         boxes = None
         if spliced is None:
             anchor_path, frame_paths, label = self.samples[index]
@@ -300,6 +308,7 @@ class JerseyDataset(Dataset):
             images = torch.stack([_load_image(path, self.resize) for path in paths])
         else:
             images, label, boxes = spliced
+        has_boxes = boxes is not None
 
         if self.augment and boxes is None:
             # One call on the whole stack, so every frame and the anchor get the same augmentation.
@@ -323,22 +332,24 @@ class JerseyDataset(Dataset):
             "label": torch.tensor(label),
             "sequence_id": self.sequence_ids[index],
             "boxes": _pad(boxes, self.max_frames)[0],
-            "has_boxes": torch.tensor(spliced is not None),
+            "has_boxes": torch.tensor(has_boxes),
         }
         if self.load_anchor:
             item["anchor"] = anchor
             item["anchor_boxes"] = anchor_boxes
         return item
 
-    def _splice(self, sequence_id):
-        """Stacked uint8 images (frames, then anchor), label and digit boxes (n, 2, 4) of a spliced version.
+    def _splice(self, sequence_id, single=False):
+        """Stacked uint8 images (frames, then anchor), label and digit boxes (n, 2, 4) of a pasted version.
 
-        None when the sequence has two digits, too few found digits, or no allowed partner.
+        A spliced pair, or with single the partner's digit pasted alone, labelled as one digit;
+        its boxes are None, since the attention loss teaches left and right only. None when the
+        sequence has two digits, too few found digits, or no allowed partner.
         """
         if len(sequence_id.split("/")[0]) != 1 or sequence_id not in self.pairs:
             return None
-        found = self.pairs.partner(sequence_id)
-        if found is None:
+        found = (self.pairs.single_partner(sequence_id), None) if single else self.pairs.partner(sequence_id)
+        if found is None or found[0] is None:
             return None
         partner_id, a_left = found
         own, other = self.pairs.frames[sequence_id], self.pairs.frames[partner_id]
@@ -353,14 +364,23 @@ class JerseyDataset(Dataset):
             anchors = (self.pairs.anchors[sequence_id], self.pairs.anchors[partner_id])
             # Without a found digit in both anchors, the first spliced frame stands in.
             pairs.append(anchors if None not in anchors else pairs[0])
-        gap = torch.randint(GAP[0], GAP[1] + 1, ()).item()  # one spacing for the whole sequence
+        # One spacing and one blend width for the whole sequence, drawn the same way for both kinds.
+        gap = torch.randint(GAP[0], GAP[1] + 1, ()).item()
+        feather = torch.randint(FEATHERS[0], FEATHERS[1] + 1, ()).item()
+        partner_digit = int(partner_id.split("/")[0])
+        if single:
+            images = torch.stack([
+                paste_single(self._load(a_name), a_box, self._load(b_name), b_box, gap, feather)[0]
+                for (a_name, a_box), (b_name, b_box) in pairs
+            ])
+            return images, (partner_digit, BLANK), None
         spliced = [
-            splice(self._load(a_name), a_box, self._load(b_name), b_box, a_left, gap)
+            splice(self._load(a_name), a_box, self._load(b_name), b_box, a_left, gap, feather)
             for (a_name, a_box), (b_name, b_box) in pairs
         ]
         images = torch.stack([image for image, _ in spliced])
         boxes = torch.stack([found for _, found in spliced])
-        digit, partner_digit = int(sequence_id.split("/")[0]), int(partner_id.split("/")[0])
+        digit = int(sequence_id.split("/")[0])
         label = (digit, partner_digit) if a_left else (partner_digit, digit)
         return images, label, boxes
 

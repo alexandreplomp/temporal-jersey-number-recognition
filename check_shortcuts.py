@@ -23,6 +23,7 @@ the two covered rows comes from the box itself; they are best compared between r
 Writes to results/runs/<run>/:
     shortcuts_val.json  the scores above
     shortcuts_val.png   val frames unchanged, torso covered and only torso, to check the box by eye
+With --count-offset prior or none (two-step runs, see evaluate.py) the files get that suffix.
 """
 
 from collections import Counter
@@ -41,6 +42,7 @@ from jersey.data import (
     filter_numbers, run_splits, torso_mask,
 )
 from jersey.model import load_run, predict_digits
+from evaluate import COUNT_OFFSETS, set_count_offset
 from train import pick_device
 
 GREY = 0.5
@@ -56,6 +58,8 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--count-offset", choices=COUNT_OFFSETS, default="saved",
+                        help="two-step runs: saved (as trained), prior (from the training numbers) or none")
     return parser.parse_args(argv)
 
 
@@ -159,6 +163,7 @@ def check_run(args, run_dir, device):
     dropped = set(config.get("linked_dropped", []))
     train_ids = [sequence_id for sequence_id in filter_numbers(splits["train"], exclude) if sequence_id not in dropped]
     val_ids = filter_numbers(splits["val"], exclude)
+    suffix, name_suffix = set_count_offset(model, args.count_offset, [s.split("/")[0] for s in train_ids])
 
     def loader(ids):
         dataset = JerseyDataset(config["data"], ids, max_frames=config["max_frames"])
@@ -169,7 +174,8 @@ def check_run(args, run_dir, device):
     most_common = Counter(sequence_id.split("/")[0] for sequence_id in train_ids).most_common(1)[0][0]
     majority = torch.tensor([encode_label(most_common)] * len(labels))
     report = {
-        "run": run_dir.name,
+        "run": run_dir.name + name_suffix,
+        "count_offset": round(getattr(model, "count_offset", 0.0), 4),
         "split": "val",
         "sequences": len(labels),
         "torso": {"rows": TORSO_ROWS, "columns": TORSO_COLUMNS},
@@ -179,8 +185,8 @@ def check_run(args, run_dir, device):
         },
         "model": {name: position_accuracy(found, labels) for name, found in predictions.items()},
     }
-    (run_dir / "shortcuts_val.json").write_text(json.dumps(report, indent=2))
-    save_torso_picture(val_loader.dataset, run_dir / "shortcuts_val.png")
+    (run_dir / f"shortcuts_val{suffix}.json").write_text(json.dumps(report, indent=2))
+    save_torso_picture(val_loader.dataset, run_dir / f"shortcuts_val{suffix}.png")
     _print_table(report)
 
 

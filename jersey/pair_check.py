@@ -117,7 +117,20 @@ def _read(model, images, device, batch_size):
 
 
 def pair_metrics(model, pair_set, device, batch_size=64):
-    """The scores in the module docstring, as floats."""
+    """The scores in the module docstring, as floats.
+
+    Scored without the model's count offset: the pairs are all two-digit by construction, so
+    this measures reading digit by digit, not the prior of how many numbers have two digits.
+    """
+    saved = getattr(model, "count_offset", 0.0)
+    model.count_offset = 0.0
+    try:
+        return _pair_metrics(model, pair_set, device, batch_size)
+    finally:
+        model.count_offset = saved
+
+
+def _pair_metrics(model, pair_set, device, batch_size):
     model.eval()
     digits, attention = _read(model, pair_set["images"], device, batch_size)
     labels = pair_set["labels"]

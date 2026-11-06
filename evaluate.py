@@ -22,6 +22,11 @@ and one row per run in results/results_<split>.csv, the comparison table (as tim
 validate.py --results-file). Re-evaluating a run replaces its row.
 
 The test split is scored once per run: a second --split test stops.
+
+--count-offset scores a two-step run with a count offset other than the one it was trained with:
+prior (log of one- to two-digit numbers in its training split, model.count_prior) or none. Its
+files get a suffix (metrics_val_prior.json, ...) and its results row the name "<run> (prior)",
+so a run can be reported with and without it. Each of these is scored once on test too.
 """
 
 from collections import Counter, defaultdict
@@ -40,10 +45,11 @@ from jersey.metrics import (
     UNSEEN, band_accuracy, confusions, count_flips, heldout_error_share, majority_baseline,
     per_number, scores, shot_bands, to_numbers,
 )
-from jersey.model import load_run, predict_digits
+from jersey.model import count_prior, load_run, predict_digits
 from train import pick_device
 
 METHODS = ("sequence", "anchor", "vote")
+COUNT_OFFSETS = ("saved", "prior", "none")
 # The column beside each answer. The vote's is the winner's share of the votes, not a
 # probability, so it is never averaged or shown as a confidence.
 SCORE_COLUMN = {"sequence": "sequence_confidence", "anchor": "anchor_confidence", "vote": "vote_agreement"}
@@ -58,6 +64,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("names", nargs="+", help="run folders under --runs, e.g. full_final")
     parser.add_argument("--split", choices=("val", "test"), default="val")
+    parser.add_argument("--count-offset", choices=COUNT_OFFSETS, default="saved",
+                        help="two-step runs: saved (as trained), prior (from the training numbers) or none")
     parser.add_argument("--runs", type=Path, default=Path("results/runs"))
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
     parser.add_argument("--batch-size", type=int, default=64)
@@ -207,10 +215,15 @@ def main(argv=None):
         evaluate_run(args, args.runs / name, device)
 
 
+def set_count_offset(model, choice, train_numbers):
+    """Apply --count-offset to model and return the file suffix and the name suffix for it."""
+    if choice == "saved":
+        return "", ""
+    model.count_offset = count_prior(train_numbers) if choice == "prior" else 0.0
+    return f"_{choice}", f" ({choice})"
+
+
 def evaluate_run(args, run_dir, device):
-    metrics_path = run_dir / f"metrics_{args.split}.json"
-    if args.split == "test" and metrics_path.exists():
-        raise FileExistsError(f"{metrics_path} exists: the test split is scored only once per run")
     model, config, epoch = load_run(run_dir, device)
     splits = run_splits(run_dir, config["splits"])
     exclude = tuple(config["exclude"])
@@ -218,6 +231,10 @@ def evaluate_run(args, run_dir, device):
     dropped = set(config.get("linked_dropped", []))
     train_numbers = [sequence_id.split("/")[0] for sequence_id in filter_numbers(splits["train"], exclude)
                      if sequence_id not in dropped]
+    suffix, name_suffix = set_count_offset(model, args.count_offset, train_numbers)
+    metrics_path = run_dir / f"metrics_{args.split}{suffix}.json"
+    if args.split == "test" and metrics_path.exists():
+        raise FileExistsError(f"{metrics_path} exists: the test split is scored only once per run")
 
     def loader(ids):
         dataset = JerseyDataset(config["data"], ids, load_anchor=True, max_frames=config["max_frames"])
@@ -226,8 +243,8 @@ def evaluate_run(args, run_dir, device):
     rows, losses = predict(model, loader(filter_numbers(splits[args.split], exclude)), device)
     metrics = {
         "run": {
-            "name": run_dir.name, "split": args.split, "variant": config["variant"],
-            "reader": config.get("reader", "fused"),
+            "name": run_dir.name + name_suffix, "split": args.split, "variant": config["variant"],
+            "reader": config.get("reader", "fused"), "count_offset": round(getattr(model, "count_offset", 0.0), 4),
             "max_frames": config["max_frames"], "epoch": epoch,
             "param_count": sum(p.numel() for p in model.parameters()),
         },
@@ -236,7 +253,7 @@ def evaluate_run(args, run_dir, device):
     }
     for method, loss in losses.items():
         metrics["methods"][method]["loss"] = loss
-    _write_rows(run_dir / f"predictions_{args.split}.csv", rows)
+    _write_rows(run_dir / f"predictions_{args.split}{suffix}.csv", rows)
 
     if exclude:
         # On val, the train and val sequences of held-out numbers: the model never trained on
@@ -246,7 +263,7 @@ def evaluate_run(args, run_dir, device):
         held = sorted(s for name in names for s in splits[name] if s.split("/")[0] in exclude)
         held_rows, _ = predict(model, loader(held), device)
         metrics["hold_out"] = {"splits": list(names), **hold_out(held_rows, train_numbers)}
-        _write_rows(run_dir / f"predictions_holdout_{args.split}.csv", held_rows)
+        _write_rows(run_dir / f"predictions_holdout_{args.split}{suffix}.csv", held_rows)
 
     metrics_path.write_text(json.dumps(metrics, indent=2))
     _update_results(args.runs.parent / f"results_{args.split}.csv", _summary_row(metrics))

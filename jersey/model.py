@@ -32,6 +32,7 @@ Shapes: B batch, T frames, Q queries, N images, C cells per frame, D feature siz
 """
 
 from pathlib import Path
+import math
 
 import torch
 from torch import nn
@@ -267,6 +268,11 @@ class JerseyModel(nn.Module):
             raise ValueError(f"image_size must be divisible by {BACKBONE_STRIDE}, got {image_size}")
         self.variant = variant
         self.reader = reader
+        # Added to the "one digit" count score when the readings are combined (compose), never to
+        # the count loss. The count loss weighs one and two digits equally, so the count head
+        # answers as if half of all numbers had two digits; count_prior gives the correction for
+        # the real mix. Not a weight: train.py saves it in config.json and load_run restores it.
+        self.count_offset = 0.0
         # With pretrained weights, keep the backbone's ImageNet BatchNorm statistics fixed,
         # so training and evaluation compute the same thing.
         self.freeze_batchnorm = pretrained
@@ -309,7 +315,8 @@ class JerseyModel(nn.Module):
         """
         if self.reader == "fused":
             return self.classifier(tokens) + self.not_allowed
-        return compose(self.classifier(tokens), count_logits)
+        shift = count_logits.new_tensor([self.count_offset, 0.0])
+        return compose(self.classifier(tokens), count_logits + shift)
 
     def read(self, images):
         """Single images (N, 3, H, W) -> tokens (N, Q, D), count logits (N, 2) and attention (N, Q, C).
@@ -399,14 +406,30 @@ class JerseyModel(nn.Module):
         }
 
 
+def count_prior(numbers):
+    """log(one-digit / two-digit numbers) in numbers: the count offset for a count head trained with both weighed equally.
+
+    The standard correction for a balanced loss (logit adjustment, Menon et al. 2021): with 4.5%
+    two-digit numbers it is log(0.955 / 0.045) = 3.05. Computed from training numbers only, so
+    nothing is tuned on val or on held-out numbers. 0 if either kind is missing.
+    """
+    two = sum(len(number) == 2 for number in numbers)
+    one = len(numbers) - two
+    return math.log(one / two) if one and two else 0.0
+
+
 def load_run(run_dir, device="cpu"):
-    """Rebuild a trained model from run_dir/best.pt: returns (model in eval mode, config, epoch)."""
+    """Rebuild a trained model from run_dir/best.pt: returns (model in eval mode, config, epoch).
+
+    The count offset comes from the config; runs from before it existed get 0.
+    """
     checkpoint = torch.load(Path(run_dir) / "best.pt", map_location="cpu")
     config = checkpoint["config"]
     # No download: the trained weights replace the pretrained ones.
     model = JerseyModel(config["variant"], max_frames=config["max_frames"], pretrained=False,
                         reader=config.get("reader", "fused"))
     model.load_state_dict(checkpoint["model"])
+    model.count_offset = config.get("count_offset", 0.0)
     return model.to(device).eval(), config, checkpoint["epoch"]
 
 

@@ -54,7 +54,7 @@ from jersey.explain import explain_run
 from jersey.metrics import (
     band_accuracy, confusions, majority_baseline, per_number, scores, shot_bands,
 )
-from jersey.model import READERS, VARIANTS, JerseyModel
+from jersey.model import READERS, VARIANTS, JerseyModel, count_prior
 from jersey.pair_check import build_pair_set, pair_metrics
 from jersey.pairs import StripBank
 
@@ -108,6 +108,8 @@ def parse_args(argv=None):
                         help="make_pairs.py --split val output: score spliced val pairs every epoch (jersey/pair_check.py)")
     parser.add_argument("--attention-weight", type=float, default=ATTENTION_WEIGHT, help="two-step reader only")
     parser.add_argument("--count-weight", type=float, default=COUNT_WEIGHT, help="two-step reader only")
+    parser.add_argument("--no-count-prior", action="store_true",
+                        help="two-step reader: leave out the count offset from the training numbers (model.count_prior)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
@@ -269,6 +271,10 @@ def main(argv=None):
     if args.init_from:
         init_from(model, args, exclude)
     model.to(device)
+    # From the train split's numbers, real two-digit ones included even when they are not
+    # trained on (stage 1): the prior is the data's mix, never val's or the held-out numbers'.
+    if args.reader == "two-step" and not args.no_count_prior:
+        model.count_offset = count_prior([sequence_id.split("/")[0] for sequence_id in train_ids])
     backbone = [p for name, p in model.named_parameters() if name.startswith("backbone.")]
     rest = [p for name, p in model.named_parameters() if not name.startswith("backbone.")]
     # The order of the groups matters: max_lr below and the logged rates follow it.
@@ -301,9 +307,11 @@ def main(argv=None):
         "linked_dropped": sorted(linked),
         "selected_by": selected_by,
         "selected_highest": higher_wins,
+        "count_offset": model.count_offset,
     }
     (run_dir / "config.json").write_text(json.dumps(config, indent=2))
-    print(f"run {run_dir}, {config['parameters']:,} parameters on {device}")
+    print(f"run {run_dir}, {config['parameters']:,} parameters on {device}"
+          + (f", count offset {model.count_offset:.2f}" if args.reader == "two-step" else ""))
 
     save_batch_grid(next(iter(train_loader)), run_dir / "train_batch.png")
 

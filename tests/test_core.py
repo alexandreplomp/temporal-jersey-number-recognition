@@ -28,7 +28,8 @@ from jersey.metrics import (
     per_number, scores, shot_bands, wilson_interval,
 )
 from jersey.model import (
-    BACKBONE_STRIDE, CELL_STRIDE, LOCAL_BLOCKS, READERS, VARIANTS, JerseyModel, compose, load_run, predict_digits,
+    BACKBONE_STRIDE, CELL_STRIDE, LOCAL_BLOCKS, READERS, VARIANTS, JerseyModel, compose, count_prior, load_run,
+    predict_digits,
     side_bias,
 )
 from jersey.pairs import FEATHER, MIN_KEPT, StripBank, paste_single, splice
@@ -1375,6 +1376,8 @@ def test_stage_one_trains_without_real_pairs_and_picks_by_pair_accuracy(two_step
     assert config["reader"] == "two-step" and config["selected_by"] == "pair_accuracy" and config["selected_highest"]
     assert config["sequences"]["train"] == 3  # 4, 9 and 8: not the real 89, nor the held-out 49
     assert config["synthetic_singles"] == 0.4
+    assert config["count_offset"] == pytest.approx(math.log(3))  # train 4, 9, 8 and 89; the 49 is held out
+    assert load_run(run)[0].count_offset == pytest.approx(math.log(3))
     assert all({"pair_accuracy", "second_is_right", "second_is_left", "left_right_gap", "singles_accuracy"} <= set(entry)
                for entry in history["epochs"])
     highest = max(history["epochs"][1:], key=lambda entry: entry["pair_accuracy"])
@@ -1537,3 +1540,55 @@ def test_single_partner_never_pastes_a_held_out_number(tmp_path):
     partners = {bank.single_partner("4/a/0").split("/")[0] for _ in range(30)}
 
     assert partners == {"8"}  # a 9 alone is held out here
+
+
+# --- Count prior: the count head is trained with one and two digits weighed equally ---------------
+
+def test_count_prior_is_the_log_ratio_of_one_to_two_digit_numbers():
+    assert count_prior(["4", "8", "9", "48"]) == pytest.approx(math.log(3))
+    assert count_prior(["4", "8"]) == 0  # no two-digit number: no correction
+
+
+def test_count_offset_moves_answers_towards_one_digit_and_zero_changes_nothing():
+    torch.manual_seed(0)
+    model = JerseyModel("averaged", max_frames=4, pretrained=False, reader="two-step").eval()
+    frames, mask = fake_batch()
+
+    with torch.no_grad():
+        plain = model(frames, mask)
+        model.count_offset = 3.0
+        shifted = model(frames, mask)
+
+    assert (shifted["logits"][:, 1, BLANK] > plain["logits"][:, 1, BLANK]).all()  # P(one digit) rises
+    assert torch.allclose(shifted["logits"].exp().sum(dim=-1), torch.ones(2, 2), atol=1e-5)
+    assert torch.equal(shifted["count_logits"], plain["count_logits"])  # the count loss never sees it
+    assert torch.equal(shifted["digit_logits"], plain["digit_logits"])
+
+
+def test_pair_metrics_ignore_the_count_offset(two_step_runs):
+    root = two_step_runs
+    pair_set = build_pair_set(root / "val_strips.json", ["4/c/0", "9/d/0"], ("49",), root / "data", count=6)
+    model = JerseyModel("averaged", pretrained=False, reader="two-step")
+
+    plain = pair_metrics(model, pair_set, "cpu")
+    model.count_offset = 10.0
+    shifted = pair_metrics(model, pair_set, "cpu")
+
+    assert plain == shifted and model.count_offset == 10.0  # restored afterwards
+
+
+def test_evaluate_and_shortcuts_score_a_run_with_and_without_the_prior(two_step_runs):
+    runs = two_step_runs / "runs"
+    for choice in ("prior", "none"):
+        evaluate_main(["s2", "--runs", str(runs), "--device", "cpu", "--workers", "0", "--count-offset", choice])
+    shortcuts_main(["s2", "--runs", str(runs), "--device", "cpu", "--workers", "0", "--count-offset", "none"])
+
+    prior = json.loads((runs / "s2" / "metrics_val_prior.json").read_text())
+    none = json.loads((runs / "s2" / "metrics_val_none.json").read_text())
+    assert prior["run"]["name"] == "s2 (prior)" and prior["run"]["count_offset"] == pytest.approx(math.log(3), abs=1e-4)
+    assert none["run"]["count_offset"] == 0
+    assert (runs / "s2" / "predictions_holdout_val_prior.csv").exists()
+    assert json.loads((runs / "s2" / "shortcuts_val_none.json").read_text())["count_offset"] == 0
+    with (runs.parent / "results_val.csv").open() as file:
+        names = {row["name"] for row in csv.DictReader(file)}
+    assert {"s2 (prior)", "s2 (none)"} <= names

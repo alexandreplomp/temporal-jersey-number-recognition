@@ -1,23 +1,27 @@
-"""Find the digit in every single-digit training image, for splicing two-digit sequences.
-Example: uv run make_pairs.py full_strong_ex49_keypos
+"""Find the digit box in every single-digit image of a split, for splicing two-digit sequences.
+Example: uv run make_pairs.py --locator results/locator/locator_ex49 --split train --exclude 49 --out results/pairs_ex49
 
-Uses a trained run to locate digits; no annotation. Its training split's single-digit
-sequences (without its held-out numbers and their linked partners) are read one image at a
-time. Each image's digit is known from its folder, so covering the place where it is should
-make the run's reading of that digit drop most:
-    1. cover a vertical strip of the torso, one digit wide, at each column; the column with the
-       largest drop holds the digit
-    2. at that column, cover a digit-sized box at each height; the largest drop gives the row
-    3. keep the box only if the run reads the image right (base >= --min-read) and covering
-       the box takes much of that away (drop >= --min-drop), so the box holds the digit
-Covering sets pixels to the ImageNet mean, as explain.py does.
+No annotation: each image's digit is known from its folder, and two independent signals
+must agree on where it is:
+    evidence  the locator's (train_locator.py) strongest torso cell for that digit gives the
+              digit centre; its crop score gives how sure it reads the digit
+    ink       in a window around the centre, the pixels split into two colour clusters
+              (k-means); the smaller cluster is the ink, and its column and row projections
+              give a box
+A box is kept only if the locator is sure (>= --min-prob), the ink box contains the evidence
+centre, and its size fits one digit (BOX_HEIGHT, BOX_WIDTH, in the 192 x 96 input).
 
-Writes to --out (results/pairs):
-    strips.json   per image: centre, base, drop, kept, kit colour; and the run, its exclude
+--split train boxes feed training (train.py --pairs); --split val boxes feed only the pair
+metric (train.py --val-pairs). Held-out numbers' sequences and the sequences linked to them
+are never read, and the locator must have held out the same numbers.
+
+Writes to --out:
+    strips.json   per image: evidence centre, probability, box, kept, kit colour; and the
+                  locator, split and held-out numbers
     summary.json  share kept per digit, usable sequences, the two-digit numbers splicing can make
-    strips.png    a spread of images with their box: green kept, red rejected
+    strips.png    PICTURE_COUNT kept images with their box, for counting by eye
+    rejected.png  rejected images with their box (red), to see what the checks throw away
     spliced.png   spliced frames as training sees them before augmentation (jersey/pairs.py)
-Train with them: uv run train.py --exclude 49 --synthetic-pairs 0.3
 """
 
 from collections import Counter, defaultdict
@@ -31,36 +35,36 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
 
-from check_shortcuts import TORSO_COLUMNS, TORSO_ROWS
 from jersey.data import (
     IMAGE_SIZE, MAX_FRAMES, NORMALIZE, _load_image, _pick_frames, denormalize, filter_numbers, find_images,
-    run_splits,
+    held_out_partners, run_splits,
 )
-from jersey.model import load_run
-from jersey.pairs import STRIP_HEIGHT, STRIP_WIDTH, StripBank, cut_strip, splice
+from jersey.local_reader import crop_scores, load_locator, torso_cells
+from jersey.model import CELL_STRIDE
+from jersey.pairs import GAP, StripBank, splice
 from train import pick_device
 
-STEP = 4  # pixels between two covered positions
-MIN_READ = 0.5
-# Boxes with a smaller drop often sat beside the digit (checked on strips.png).
-MIN_DROP = 0.5
-PICTURE_COUNT = 48
-CHUNK = 512  # covered images per forward pass
+MIN_PROB = 0.9
+WINDOW = (48, 32)  # height, width of the ink search around the evidence centre
+BOX_HEIGHT = (12, 45)
+BOX_WIDTH = (6, 28)
+INK_SHARE = 0.15  # a row or column is ink if it has at least this share of the busiest one
+KMEANS_STEPS = 10
+PICTURE_COUNT = 100
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("run", help="run folder under --runs that locates the digits, e.g. full_strong_ex49_keypos")
-    parser.add_argument("--runs", type=Path, default=Path("results/runs"))
+    parser.add_argument("--locator", type=Path, required=True, help="train_locator.py run folder")
+    parser.add_argument("--split", choices=("train", "val"), default="train")
+    parser.add_argument("--exclude", nargs="*", default=[], help="must match the locator's held-out numbers")
     parser.add_argument("--out", type=Path, default=Path("results/pairs"))
     parser.add_argument("--max-frames", type=int, default=MAX_FRAMES,
                         help="frames per sequence, evenly spread, plus the anchor")
-    parser.add_argument("--min-read", type=float, default=MIN_READ,
-                        help="keep a box only if the run reads the image's digit at least this sure")
-    parser.add_argument("--min-drop", type=float, default=MIN_DROP,
-                        help="keep a box only if covering it lowers that by at least this much")
+    parser.add_argument("--min-prob", type=float, default=MIN_PROB,
+                        help="keep a box only if the locator reads the image's digit at least this sure")
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--workers", type=int, default=4)
     return parser.parse_args(argv)
 
@@ -82,21 +86,20 @@ class Images(Dataset):
         return {"image": NORMALIZE(image[None])[0], "digit": digit, "index": index}
 
 
-def torso_box(height, width):
-    """Torso rows and columns as (start, end) pairs, as in check_shortcuts.torso_mask."""
-    rows = (round(TORSO_ROWS[0] * height), round(TORSO_ROWS[1] * height))
-    columns = (round(TORSO_COLUMNS[0] * width), round(TORSO_COLUMNS[1] * width))
-    return rows, columns
+def split_ids(splits, split, exclude, issues):
+    """Single-digit ids of the split, without held-out numbers and the sequences linked to them."""
+    everything = [sequence_id for name in ("train", "val", "test") for sequence_id in splits[name]]
+    linked = held_out_partners(issues, everything, exclude) if exclude else set()
+    return [
+        sequence_id for sequence_id in filter_numbers(splits[split], exclude)
+        if sequence_id not in linked and len(sequence_id.split("/")[0]) == 1
+    ]
 
 
-def single_digit_images(splits, config, data_dir, max_frames):
-    """Entries (image name, digit, is anchor) of the run's single-digit training sequences."""
-    exclude = tuple(config["exclude"])
-    dropped = set(config.get("linked_dropped", []))
+def single_digit_images(sequence_ids, data_dir, max_frames):
+    """Entries (image name, digit, is anchor): evenly spread frames and the anchor of each sequence."""
     entries = []
-    for sequence_id in filter_numbers(splits["train"], exclude):
-        if sequence_id in dropped or len(sequence_id.split("/")[0]) != 1:
-            continue
+    for sequence_id in sequence_ids:
         anchor, frames = find_images(Path(data_dir) / sequence_id)
         picked = _pick_frames(len(frames), max_frames, at_random=False).tolist()
         digit = int(sequence_id.split("/")[0])
@@ -105,80 +108,105 @@ def single_digit_images(splits, config, data_dir, max_frames):
     return entries
 
 
-def read(model, images, digits):
-    """Probability that each image alone reads its digit as the first digit: (N,)."""
-    probabilities = model.read_frames(images).softmax(dim=-1)[:, 0]
-    return probabilities.gather(1, digits[:, None]).squeeze(1)
-
-
-def covered_reads(model, images, digits, boxes):
-    """read with box (top, bottom, left, right) k of image n covered: boxes (N, K, 4) -> (N, K)."""
-    N, K = boxes.shape[:2]
-    H, W = images.shape[-2:]
-    rows = torch.arange(H, device=images.device)[:, None]
-    columns = torch.arange(W, device=images.device)[None, :]
-    top, bottom, left, right = (boxes[..., i, None, None] for i in range(4))
-    inside = (rows >= top) & (rows < bottom) & (columns >= left) & (columns < right)  # (N, K, H, W)
-    results = []
-    for part in torch.arange(N * K, device=images.device).split(CHUNK):
-        n, k = part // K, part % K
-        results.append(read(model, images[n] * ~inside[n, k][:, None], digits[n]))
-    return torch.cat(results).reshape(N, K)
-
-
 @torch.no_grad()
-def locate(model, images, digits):
-    """Find each image's digit by covering: centres (N, 2) as (x, y), base (N,) and drop (N,)."""
-    N, _, H, W = images.shape
-    device = images.device
-    rows, columns = torso_box(H, W)
-    base = read(model, images, digits)
-
-    xs = torch.arange(columns[0] + STRIP_WIDTH // 2, columns[1] - STRIP_WIDTH // 2 + 1, STEP, device=device)
-    strips = torch.stack([
-        torch.full_like(xs, rows[0]), torch.full_like(xs, rows[1]), xs - STRIP_WIDTH // 2, xs + STRIP_WIDTH - STRIP_WIDTH // 2,
-    ], dim=-1).expand(N, -1, -1)
-    x = xs[(base[:, None] - covered_reads(model, images, digits, strips)).argmax(dim=1)]  # (N,)
-
-    ys = torch.arange(rows[0] + STRIP_HEIGHT // 2, rows[1] - STRIP_HEIGHT // 2 + 1, STEP, device=device)
-    left, right = x - STRIP_WIDTH // 2, x + STRIP_WIDTH - STRIP_WIDTH // 2
-    boxes = torch.stack([
-        (ys - STRIP_HEIGHT // 2).expand(N, -1), (ys + STRIP_HEIGHT - STRIP_HEIGHT // 2).expand(N, -1),
-        left[:, None].expand(-1, len(ys)), right[:, None].expand(-1, len(ys)),
-    ], dim=-1)
-    drops = base[:, None] - covered_reads(model, images, digits, boxes)
-    best = drops.argmax(dim=1)
-    y = ys[best]
-    return torch.stack([x, y], dim=1).float(), base, drops[torch.arange(N, device=device), best]
+def evidence(locator, images, digits):
+    """Digit centres (N, 2) as (x, y) from the strongest torso cell, and the probability (N,) of the digit."""
+    cells = locator(images)  # (N, 10, h, w)
+    N, _, h, w = cells.shape
+    probability = crop_scores(cells).softmax(dim=1).gather(1, digits[:, None]).squeeze(1)
+    own = cells[torch.arange(N, device=cells.device), digits]  # (N, h, w)
+    own = own.masked_fill(~torso_cells(h, w).to(cells.device), float("-inf"))
+    best = own.flatten(1).argmax(dim=1)
+    rows, columns = best // w, best % w
+    centres = torch.stack([(columns + 0.5) * CELL_STRIDE, (rows + 0.5) * CELL_STRIDE], dim=1).float()
+    return centres, probability
 
 
-def kit_colours(images, centres):
-    """Median colour of the digit box of each image, so the kit and not the grass: (N, 3) in [0, 1].
+def two_colours(pixels, steps=KMEANS_STEPS):
+    """k-means with two clusters on pixels (P, 3): labels (P,) and centres (2, 3).
 
-    The median, since the digit's strokes cover less of the box than the shirt does.
+    Starts from the darkest and the brightest pixel, so it is repeatable.
     """
-    colours = []
-    for image, centre in zip(denormalize(images), centres.tolist()):
-        strip = cut_strip(image, centre, width=STRIP_WIDTH)
-        colours.append(strip.flatten(1).median(dim=1).values)
-    return torch.stack(colours)
+    brightness = pixels.mean(dim=1)
+    centres = torch.stack([pixels[brightness.argmin()], pixels[brightness.argmax()]])
+    labels = torch.zeros(len(pixels), dtype=torch.long)
+    for _ in range(steps):
+        labels = torch.cdist(pixels, centres).argmin(dim=1)
+        for k in range(2):
+            if (labels == k).any():
+                centres[k] = pixels[labels == k].mean(dim=0)
+    return labels, centres
 
 
-def locate_all(model, dataset, args, device):
-    """Results per entry of dataset: centre, base, drop and kit colour."""
+def _run(flags, at):
+    """The run of consecutive True in flags (L,) containing index at, or the nearest one: (start, end)."""
+    found = flags.nonzero().flatten()
+    if len(found) == 0:
+        return None
+    if not flags[at]:
+        at = found[(found - at).abs().argmin()].item()
+    start = end = at
+    while start > 0 and flags[start - 1]:
+        start -= 1
+    while end < len(flags) - 1 and flags[end + 1]:
+        end += 1
+    return start, end + 1
+
+
+def ink_box(image, centre):
+    """Box [left, top, right, bottom] of the ink near centre in image (3, H, W) in [0, 1], and the kit colour.
+
+    The window around centre splits into two colour clusters; the smaller is the ink and the
+    larger the shirt. Columns, then rows within those columns, count as ink when they hold at
+    least INK_SHARE of the busiest one; the run nearest the centre gives the box. None if no ink.
+    """
+    H, W = image.shape[-2:]
+    x, y = centre
+    x0 = min(max(round(x - WINDOW[1] / 2), 0), W - WINDOW[1])
+    y0 = min(max(round(y - WINDOW[0] / 2), 0), H - WINDOW[0])
+    patch = image[:, y0:y0 + WINDOW[0], x0:x0 + WINDOW[1]]
+    labels, centres = two_colours(patch.flatten(1).T)
+    counts = torch.bincount(labels, minlength=2)
+    ink = (labels == counts.argmin()).reshape(WINDOW).float()
+    kit = centres[counts.argmax()]
+
+    per_column = ink.sum(dim=0)
+    if per_column.max() == 0:
+        return None, kit
+    columns = _run(per_column >= INK_SHARE * per_column.max(), min(max(round(x) - x0, 0), WINDOW[1] - 1))
+    per_row = ink[:, columns[0]:columns[1]].sum(dim=1)
+    rows = _run(per_row >= INK_SHARE * per_row.max(), min(max(round(y) - y0, 0), WINDOW[0] - 1))
+    return [x0 + columns[0], y0 + rows[0], x0 + columns[1], y0 + rows[1]], kit
+
+
+def keep(box, centre, probability, min_prob):
+    """The three checks: a sure locator, a box containing the evidence centre, a digit-sized box."""
+    if box is None or probability < min_prob:
+        return False
+    left, top, right, bottom = box
+    x, y = centre
+    return (left <= x < right and top <= y < bottom
+            and BOX_HEIGHT[0] <= bottom - top <= BOX_HEIGHT[1] and BOX_WIDTH[0] <= right - left <= BOX_WIDTH[1])
+
+
+def locate_all(locator, dataset, args, device):
+    """Results per entry of dataset: evidence centre, probability, ink box, kit colour and kept."""
     found = [None] * len(dataset)
     loader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.workers)
     for done, batch in enumerate(loader):
-        centres, base, drop = locate(model, batch["image"].to(device), batch["digit"].to(device))
-        colours = kit_colours(batch["image"], centres.cpu())
-        for i, index in enumerate(batch["index"].tolist()):
+        centres, probability = evidence(locator, batch["image"].to(device), batch["digit"].to(device))
+        centres, probability = centres.cpu(), probability.cpu()
+        for image, centre, p, index in zip(denormalize(batch["image"]), centres.tolist(), probability.tolist(),
+                                           batch["index"].tolist()):
+            box, kit = ink_box(image, centre)
             found[index] = {
-                "centre": [round(v, 1) for v in centres[i].tolist()],
-                "base": round(base[i].item(), 4),
-                "drop": round(drop[i].item(), 4),
-                "colour": [round(v, 4) for v in colours[i].tolist()],
+                "centre": centre,
+                "prob": round(p, 4),
+                "box": box,
+                "colour": [round(v, 4) for v in kit.tolist()],
+                "kept": keep(box, centre, p, args.min_prob),
             }
-        if done % 50 == 0:
+        if done % 20 == 0:
             print(f"{min((done + 1) * args.batch_size, len(dataset))}/{len(dataset)} images", flush=True)
     return found
 
@@ -212,46 +240,55 @@ def _show(axis, image, title):
     axis.axis("off")
 
 
-def save_strips_picture(data_dir, sequences, path):
-    """A spread of located images with their box: green kept, red rejected."""
-    images = [image for found in sequences.values() for image in found]
-    picks = torch.linspace(0, len(images) - 1, min(PICTURE_COUNT, len(images))).round().long().tolist()
+def _grid(count, columns=12):
+    rows = max(1, -(-count // columns))
+    return Figure(figsize=(columns * 1.3, rows * 2.8)), rows, columns
+
+
+def _spread(items, count):
+    return [items[i] for i in torch.linspace(0, len(items) - 1, min(count, len(items))).round().long().tolist()] if items else []
+
+
+def save_boxes_picture(data_dir, images, path, count=PICTURE_COUNT):
+    """A spread of images with their box: green kept, red rejected, and the evidence centre as a dot."""
+    picks = _spread(images, count)
     resize = v2.Resize(IMAGE_SIZE, antialias=True)
-    columns = 12
-    figure = Figure(figsize=(columns * 1.3, -(-len(picks) // columns) * 2.8))
-    for i, pick in enumerate(picks):
-        found = images[pick]
-        axis = figure.add_subplot(-(-len(picks) // columns), columns, i + 1)
+    figure, rows, columns = _grid(len(picks))
+    for i, found in enumerate(picks):
+        axis = figure.add_subplot(rows, columns, i + 1)
         _show(axis, _load_image(Path(data_dir) / found["image"], resize),
-              f"{found['image'].split('/')[0]}  r{found['base']:.2f} d{found['drop']:.2f}")
-        x, y = found["centre"]
-        axis.add_patch(Rectangle((x - STRIP_WIDTH / 2 - 0.5, y - STRIP_HEIGHT / 2 - 0.5), STRIP_WIDTH, STRIP_HEIGHT,
-                                 fill=False, linewidth=1.2, edgecolor="lime" if found["kept"] else "red"))
+              f"{i + 1}: {found['image'].split('/')[0]}  p{found['prob']:.2f}")
+        if found["box"] is not None:
+            left, top, right, bottom = found["box"]
+            axis.add_patch(Rectangle((left - 0.5, top - 0.5), right - left, bottom - top, fill=False,
+                                     linewidth=1.0, edgecolor="lime" if found["kept"] else "red"))
+        axis.plot(*found["centre"], marker=".", color="yellow", markersize=3)
     figure.tight_layout()
     figure.savefig(path, dpi=110)
 
 
-def save_spliced_picture(data_dir, bank, path):
-    """First spliced frame of a spread of usable sequences, with the number it is labelled."""
-    ids = bank.sequence_ids()
-    picks = torch.linspace(0, len(ids) - 1, min(PICTURE_COUNT, len(ids))).round().long().tolist() if ids else []
+def save_spliced_picture(data_dir, bank, path, count=48):
+    """First spliced frame of a spread of usable sequences, with the number it is labelled and both boxes."""
     resize = v2.Resize(IMAGE_SIZE, antialias=True)
-    columns = 12
-    figure = Figure(figsize=(columns * 1.3, max(1, -(-len(picks) // columns)) * 2.8))
+    picks = _spread(bank.sequence_ids(), count)
+    figure, rows, columns = _grid(len(picks))
     shown = 0
-    for pick in picks:
-        sequence_id = ids[pick]
+    for sequence_id in picks:
         found = bank.partner(sequence_id)
         if found is None:
             continue
         partner_id, a_left = found
-        (a_name, a_centre), (b_name, b_centre) = bank.frames[sequence_id][0], bank.frames[partner_id][0]
-        image = splice(_load_image(Path(data_dir) / a_name, resize), a_centre,
-                       _load_image(Path(data_dir) / b_name, resize), b_centre, a_left)
+        (a_name, a_box), (b_name, b_box) = bank.frames[sequence_id][0], bank.frames[partner_id][0]
+        gap = torch.randint(GAP[0], GAP[1] + 1, ()).item()
+        image, boxes = splice(_load_image(Path(data_dir) / a_name, resize), a_box,
+                              _load_image(Path(data_dir) / b_name, resize), b_box, a_left, gap)
         digit, other = sequence_id.split("/")[0], partner_id.split("/")[0]
         shown += 1
-        _show(figure.add_subplot(max(1, -(-len(picks) // columns)), columns, shown), image,
-              f"{digit + other if a_left else other + digit}  (from {digit})")
+        axis = figure.add_subplot(rows, columns, shown)
+        _show(axis, image, f"{digit + other if a_left else other + digit}  (from {digit})")
+        for (left, top, right, bottom), colour in zip(boxes.tolist(), ("red", "deepskyblue")):
+            axis.add_patch(Rectangle((left - 0.5, top - 0.5), right - left, bottom - top, fill=False,
+                                     linewidth=0.6, edgecolor=colour))
     figure.tight_layout()
     figure.savefig(path, dpi=110)
 
@@ -260,28 +297,34 @@ def main(argv=None):
     args = parse_args(argv)
     torch.manual_seed(0)  # partner draws for spliced.png
     device = pick_device(args.device)
-    run_dir = args.runs / args.run
-    model, config, _ = load_run(run_dir, device)
-    splits = run_splits(run_dir, config["splits"])
-    entries = single_digit_images(splits, config, config["data"], args.max_frames)
-    print(f"{len(entries)} images of single-digit training sequences, located with {args.run} on {device}")
-    found = locate_all(model, Images(config["data"], entries), args, device)
+    locator, config, _ = load_locator(args.locator, device)
+    exclude = tuple(args.exclude)
+    if sorted(exclude) != sorted(config["exclude"]):
+        raise ValueError(f"--exclude {list(exclude)} differs from the locator's {config['exclude']}: "
+                         "train a locator that held out the same numbers")
+    splits = run_splits(args.locator, config["splits"])
+    issues = json.loads(Path(config["issues"]).read_text()) if exclude else {}
+    ids = split_ids(splits, args.split, exclude, issues)
+    entries = single_digit_images(ids, config["data"], args.max_frames)
+    print(f"{len(entries)} images of {len(ids)} single-digit {args.split} sequences, located with {args.locator} on {device}")
+    found = locate_all(locator, Images(config["data"], entries), args, device)
 
     sequences = defaultdict(list)
     for (name, _, is_anchor), result in zip(entries, found):
-        kept = result["base"] >= args.min_read and result["drop"] >= args.min_drop
-        sequences[name.rsplit("/", 1)[0]].append({"image": name, "anchor": is_anchor, "kept": kept, **result})
+        sequences[name.rsplit("/", 1)[0]].append({"image": name, "anchor": is_anchor, **result})
     args.out.mkdir(parents=True, exist_ok=True)
     strips = {
-        "run": args.run, "data": config["data"], "exclude": config["exclude"],
-        "image_size": list(IMAGE_SIZE), "strip": [STRIP_WIDTH, STRIP_HEIGHT],
-        "min_read": args.min_read, "min_drop": args.min_drop, "sequences": sequences,
+        "locator": str(args.locator), "split": args.split, "data": config["data"], "exclude": list(exclude),
+        "image_size": list(IMAGE_SIZE), "min_prob": args.min_prob, "box_height": BOX_HEIGHT, "box_width": BOX_WIDTH,
+        "sequences": sequences,
     }
     (args.out / "strips.json").write_text(json.dumps(strips))
     bank = StripBank(args.out / "strips.json")
-    summary = summarise(sequences, bank, tuple(config["exclude"]))
+    summary = summarise(sequences, bank, exclude)
     (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
-    save_strips_picture(config["data"], sequences, args.out / "strips.png")
+    images = [image for images in sequences.values() for image in images]
+    save_boxes_picture(config["data"], [image for image in images if image["kept"]], args.out / "strips.png")
+    save_boxes_picture(config["data"], [image for image in images if not image["kept"]], args.out / "rejected.png", 48)
     save_spliced_picture(config["data"], bank, args.out / "spliced.png")
     print(json.dumps(summary, indent=2))
 

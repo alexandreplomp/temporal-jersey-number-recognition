@@ -54,6 +54,39 @@ def make_backbone(pretrained):
     return mobilenet_v3_small(weights=weights).features[:BACKBONE_BLOCKS]
 
 
+class Residual1x1(nn.Module):
+    """x + ReLU(BN(conv1x1(x))): mixes channels within a cell, never across cells."""
+
+    def __init__(self, channels):
+        super().__init__()
+        self.layer = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=1, bias=False), nn.BatchNorm2d(channels), nn.ReLU(),
+        )
+
+    def forward(self, x):
+        return x + self.layer(x)
+
+
+class LocalHead(nn.Module):
+    """Local features (N, LOCAL_CHANNELS, h, w) -> (N, dim, h, w), seeing about one digit per cell.
+
+    One 3 x 3 convolution, then 1 x 1 residual layers. No squeeze-excitation or pooling, so a
+    cell's output depends only on the pixels near it: block 3's 31-pixel view plus one cell
+    each side. (Block 1 of the backbone has squeeze-excitation, a global channel gate, so the
+    input is not strictly local: a far change moves a cell slightly, not much.)
+    """
+
+    def __init__(self, dim=128, layers=2, in_channels=LOCAL_CHANNELS):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Conv2d(in_channels, dim, kernel_size=3, padding=1, bias=False), nn.BatchNorm2d(dim), nn.ReLU(),
+            *(Residual1x1(dim) for _ in range(layers)),
+        )
+
+    def forward(self, local):
+        return self.layers(local)
+
+
 class DigitQueries(nn.Module):
     """Two learned queries search a frame's cells: one for the first digit, one for the second."""
 

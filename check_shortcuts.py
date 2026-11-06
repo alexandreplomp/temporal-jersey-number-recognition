@@ -37,15 +37,12 @@ from torchvision.transforms import v2
 from torchvision.utils import make_grid, save_image
 
 from jersey.data import (
-    IMAGENET_MEAN, IMAGENET_STD, JerseyDataset, denormalize, encode_label, filter_numbers, run_splits,
+    IMAGENET_MEAN, IMAGENET_STD, TORSO_COLUMNS, TORSO_ROWS, JerseyDataset, denormalize, encode_label,
+    filter_numbers, run_splits, torso_mask,
 )
 from jersey.model import load_run, predict_digits
 from train import pick_device
 
-# Where the number is in a player crop, as shares of height and width: below the head,
-# above the shorts. Checked by eye on shortcuts_val.png.
-TORSO_ROWS = (0.15, 0.55)
-TORSO_COLUMNS = (0.1, 0.9)
 GREY = 0.5
 HISTOGRAM_BINS = 8  # per channel, so 512 colours
 PICTURE_COUNT = 12
@@ -60,15 +57,6 @@ def parse_args(argv=None):
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--workers", type=int, default=4)
     return parser.parse_args(argv)
-
-
-def torso_mask(height, width):
-    """True on the number area of a crop: (H, W)."""
-    mask = torch.zeros(height, width, dtype=torch.bool)
-    rows = slice(round(TORSO_ROWS[0] * height), round(TORSO_ROWS[1] * height))
-    columns = slice(round(TORSO_COLUMNS[0] * width), round(TORSO_COLUMNS[1] * width))
-    mask[rows, columns] = True
-    return mask
 
 
 def cover(images, torso):

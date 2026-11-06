@@ -105,6 +105,21 @@ def pick_device(name):
     return torch.device("cpu")
 
 
+def training_ids(splits, exclude, issues_path):
+    """Train ids without held-out numbers and their linked partners, and the partners dropped.
+
+    Shared with train_locator.py, so every training step leaves out the same sequences.
+    """
+    train_ids = filter_numbers(splits["train"], exclude)
+    linked = set()
+    if exclude:
+        everything = [sequence_id for name in ("train", "val", "test") for sequence_id in splits[name]]
+        linked = held_out_partners(json.loads(Path(issues_path).read_text()), everything, exclude) & set(train_ids)
+        train_ids = [sequence_id for sequence_id in train_ids if sequence_id not in linked]
+        print(f"dropped {len(linked)} train sequences linked to held-out numbers: {sorted(linked)}")
+    return train_ids, linked
+
+
 def save_batch_grid(batch, path):
     """Save a batch as the model sees it: one sequence per row, the anchor last, padding black."""
     images = torch.cat([batch["frames"], batch["anchor"][:, None]], dim=1)  # (B, T+1, 3, H, W)
@@ -144,6 +159,8 @@ def load_pairs(args, exclude, train_ids):
         ValueError: the bank may splice a held-out number, or holds sequences outside train.
     """
     bank = StripBank(args.pairs)
+    if bank.split != "train":
+        raise ValueError(f"{args.pairs} holds {bank.split} boxes; only train boxes may feed training")
     missing = set(exclude) - set(bank.exclude)
     if missing:
         raise ValueError(f"{args.pairs} was made without holding out {sorted(missing)}, so it could splice them")
@@ -151,7 +168,7 @@ def load_pairs(args, exclude, train_ids):
     if outside:
         raise ValueError(f"{args.pairs} has {len(outside)} sequences outside this run's train split, e.g. {min(outside)}")
     print(f"splicing {args.synthetic_pairs:.0%} of single-digit samples, {len(bank.sequence_ids())} sequences "
-          f"located by {bank.run}")
+          f"located by {bank.locator}")
     return bank
 
 
@@ -174,14 +191,8 @@ def main(argv=None):
 
     splits = json.loads(args.splits.read_text())
     exclude = tuple(args.exclude)
-    train_ids = filter_numbers(splits["train"], exclude)
+    train_ids, linked = training_ids(splits, exclude, args.issues)
     val_ids = filter_numbers(splits["val"], exclude)
-    linked = set()
-    if exclude:
-        everything = [sequence_id for name in ("train", "val", "test") for sequence_id in splits[name]]
-        linked = held_out_partners(json.loads(args.issues.read_text()), everything, exclude) & set(train_ids)
-        train_ids = [sequence_id for sequence_id in train_ids if sequence_id not in linked]
-        print(f"dropped {len(linked)} train sequences linked to held-out numbers: {sorted(linked)}")
     picked = torch.randperm(len(train_ids), generator=torch.Generator().manual_seed(args.seed))
     check_ids = sorted(train_ids[i] for i in picked[:args.train_check_size].tolist())
     pairs = load_pairs(args, exclude, train_ids) if args.synthetic_pairs > 0 else None

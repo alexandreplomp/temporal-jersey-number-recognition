@@ -13,7 +13,7 @@ import torch
 from check_data import find_anchor_frame_links, find_issues
 from check_shortcuts import PERTURBATIONS, colour_baseline, cover, main as shortcuts_main, position_accuracy
 from jersey.data import (
-    AUGMENTS, BLANK, IMAGE_SIZE, MAX_FRAMES, JerseyDataset, decode_label, encode_label, find_images,
+    AUGMENTS, BLANK, denormalize, IMAGE_SIZE, MAX_FRAMES, JerseyDataset, decode_label, encode_label, find_images,
     filter_numbers, held_out_partners, linked_groups, make_sampler,
 )
 from jersey.engine import digit_loss, evaluate, train_one_epoch
@@ -21,16 +21,18 @@ from jersey.explain import (
     attention_check, frame_removal, frame_weights, map_similarity, occlusion_map, query_maps,
     temporal_attention, temporal_pass,
 )
+from jersey.local_reader import TOP_CELLS, LocalDigitReader, crop_scores, load_locator, torso_cells
 from jersey.metrics import (
     band_accuracy, confusions, count_flips, heldout_error_share, macro, majority_baseline,
     per_number, scores, shot_bands, wilson_interval,
 )
 from jersey.model import BACKBONE_STRIDE, CELL_STRIDE, VARIANTS, JerseyModel, predict_digits, side_bias
 from jersey.pairs import FEATHER, MIN_KEPT, StripBank, splice
-from make_pairs import main as pairs_main
+from make_pairs import MIN_PROB, ink_box, keep, main as pairs_main
 from make_splits import SPLITS, flagged_players, make_splits
 from evaluate import main as evaluate_main, prefix_answers, score, vote
 from train import main as train_main
+from train_locator import main as locator_main
 
 RESULTS = Path(__file__).parent.parent / "results"
 NO_ISSUES = {
@@ -942,34 +944,55 @@ def test_check_shortcuts_writes_scores_and_picture(tiny_runs):
     assert (tiny_runs / "holdout" / "shortcuts_val.png").exists()
 
 
-def test_splice_puts_the_two_strips_side_by_side_without_a_hard_seam():
-    a = torch.zeros(3, *IMAGE_SIZE, dtype=torch.uint8)
-    b = torch.full((3, *IMAGE_SIZE), 200, dtype=torch.uint8)
-    centre = (48, 96)
-
-    first = splice(a, centre, b, centre, a_left=True)
-    second = splice(a, centre, b, centre, a_left=False)
-
-    assert first.shape == a.shape and first.dtype == torch.uint8
-    assert first[:, 96, 40].tolist() == [0] * 3 and first[:, 96, 56].tolist() == [200] * 3
-    assert second[:, 96, 40].tolist() == [200] * 3 and second[:, 96, 56].tolist() == [0] * 3
-    assert first[:, :60].eq(0).all() and first[:, :, :20].eq(0).all()  # outside the patch: A as it was
-    steps = first[0, 96].int().diff().abs()
-    assert steps.max() <= 200 / (FEATHER + 1) + 1  # A fades into B, and B into the frame
+DIGIT_BOX = [40, 80, 52, 105]  # a digit 12 wide and 25 tall in the 192 x 96 input
 
 
-def fake_strips(path, kept_frames, exclude=()):
+def digit_image(box=DIGIT_BOX, ink=255, shirt=0, size=IMAGE_SIZE):
+    """A uint8 shirt (3, H, W) with one solid block of ink where box is."""
+    image = torch.full((3, *size), shirt, dtype=torch.uint8)
+    left, top, right, bottom = box
+    image[:, top:bottom, left:right] = ink
+    return image
+
+
+def test_splice_boxes_sit_side_by_side_where_a_was_and_cover_it():
+    a = digit_image()  # white digit on black
+    b = digit_image([30, 60, 40, 80], ink=200, shirt=100)  # a smaller grey digit on grey
+    a_centre = (DIGIT_BOX[0] + DIGIT_BOX[2]) / 2
+
+    for a_left in (True, False):
+        image, boxes = splice(a, DIGIT_BOX, b, [30, 60, 40, 80], a_left, gap=3)
+        first, second = boxes.tolist()
+        own, other = (first, second) if a_left else (second, first)
+
+        assert image.shape == a.shape and image.dtype == torch.uint8 and boxes.shape == (2, 4)
+        assert second[0] - first[2] == pytest.approx(3, abs=1)  # the gap, in reading order
+        assert other[3] - other[1] == pytest.approx(DIGIT_BOX[3] - DIGIT_BOX[1], abs=1)  # scaled to A's height
+        assert (first[0] + second[2]) / 2 == pytest.approx(a_centre, abs=1)  # centred where A's digit was
+        assert own[1] == DIGIT_BOX[1] and own[3] == DIGIT_BOX[3]
+        l, t, r, b_ = (round(v) for v in own)
+        assert image[:, t + 2:b_ - 2, l + 2:r - 2].eq(255).all()  # A's digit inside its box
+        l, t, r, b_ = (round(v) for v in other)
+        assert image[:, t + 2:b_ - 2, l + 2:r - 2].sub(200).abs().le(2).all()  # B's digit inside its box
+        white = (image[0] == 255).nonzero()
+        assert white[:, 1].min() >= own[0] - 1 and white[:, 1].max() < own[2] + 1  # A's old digit is covered
+        assert image[:, :70].eq(0).all() and image[:, :, :10].eq(0).all()  # outside the patch: A as it was
+        steps = image[0, DIGIT_BOX[1] - 1].int().diff().abs()  # a row above the digits, inside the patch
+        assert steps.max() <= 100 / FEATHER + 2  # A's shirt fades into B's, and the patch into the frame
+
+
+def fake_strips(path, kept_frames, exclude=(), split="train"):
     """Write a make_pairs.py output: each sequence gets kept_frames[sequence] kept frames and a kept anchor."""
     sequences = {
         sequence_id: [
             {"image": f"{sequence_id}/1_{frame}_0.png", "anchor": False, "kept": frame <= kept,
-             "centre": [48, 90], "base": 0.9, "drop": 0.5, "colour": [0.5, 0.5, 0.5]}
+             "centre": [46, 92], "prob": 0.95, "box": DIGIT_BOX, "colour": [0.5, 0.5, 0.5]}
             for frame in range(1, 4)
         ] + [{"image": f"{sequence_id}/1_0_0_anchor.jpg", "anchor": True, "kept": True,
-              "centre": [48, 90], "base": 0.9, "drop": 0.5, "colour": [0.5, 0.5, 0.5]}]
+              "centre": [46, 92], "prob": 0.95, "box": DIGIT_BOX, "colour": [0.5, 0.5, 0.5]}]
         for sequence_id, kept in kept_frames.items()
     }
-    path.write_text(json.dumps({"run": "fake", "exclude": list(exclude), "sequences": sequences}))
+    path.write_text(json.dumps({"locator": "fake", "split": split, "exclude": list(exclude), "sequences": sequences}))
     return path
 
 
@@ -1007,21 +1030,92 @@ def test_dataset_splices_only_when_augmenting(tmp_path):
     assert {decode_label(*item["label"].tolist()) for item in spliced} == {"94"}
     assert all(item["mask"].sum() == 3 and item["frames"].shape == (4, 3, *IMAGE_SIZE) for item in spliced)
     assert all(item["anchor"].shape == (3, *IMAGE_SIZE) for item in spliced)
+    assert all(item["has_boxes"] and item["boxes"].shape == (4, 2, 4) for item in spliced)
+    assert all(item["boxes"][:3].abs().sum() > 0 and item["anchor_boxes"].shape == (2, 4) for item in spliced)
     assert {decode_label(*item["label"].tolist()) for item in plain} == {"4", "9"}
+    assert not any(item["has_boxes"] or item["boxes"].any() for item in plain)
 
 
-def test_make_pairs_writes_bank_summary_and_pictures(tiny_runs, tmp_path):
+@pytest.fixture(scope="module")
+def tiny_locator(tiny_runs):
+    """A locator trained one epoch on the tiny data, holding out 49 as the "holdout" run does."""
+    root = tiny_runs.parent
+    locator_main([
+        "--epochs", "1", "--batch-size", "2", "--no-pretrained", "--workers", "0", "--device", "cpu",
+        "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--issues", str(root / "data_issues.json"),
+        "--out", str(root / "locator"), "--run-name", "loc_ex49", "--exclude", "49",
+    ])
+    return root / "locator" / "loc_ex49"
+
+
+@pytest.mark.parametrize("split, expected", [("train", {"4/a/0"}), ("val", {"4/c/0"})])
+def test_make_pairs_reads_only_the_split_without_held_out_partners(tiny_locator, tmp_path, split, expected):
     out = tmp_path / "pairs"
-    # An untrained run reads nothing, so keep every box to get a bank to splice from.
-    pairs_main(["smoke", "--runs", str(tiny_runs), "--out", str(out), "--device", "cpu", "--workers", "0",
-                "--min-read", "0", "--min-drop", "-1"])
+    pairs_main(["--locator", str(tiny_locator), "--split", split, "--exclude", "49", "--out", str(out),
+                "--device", "cpu", "--workers", "0", "--min-prob", "0"])
 
     strips = json.loads((out / "strips.json").read_text())
-    assert set(strips["sequences"]) == {"4/a/0", "4/f/0"}  # the single-digit train sequences
-    assert all(image["kept"] for images in strips["sequences"].values() for image in images)
-    summary = json.loads((out / "summary.json").read_text())
-    assert summary["numbers"] == ["44"]
-    assert (out / "strips.png").exists() and (out / "spliced.png").exists()
+    assert set(strips["sequences"]) == expected  # 4/f/0 is linked to a 49, so never read
+    assert strips["split"] == split and strips["exclude"] == ["49"]
+    image = strips["sequences"][min(expected)][0]
+    assert {"centre", "prob", "box", "colour", "kept"} <= set(image)
+    assert json.loads((out / "summary.json").read_text())["never made (held out)"] == ["49"]
+    assert all((out / name).exists() for name in ("strips.png", "rejected.png", "spliced.png"))
+
+
+def test_make_pairs_refuses_a_locator_with_other_held_out_numbers(tiny_locator, tmp_path):
+    with pytest.raises(ValueError, match="differs from the locator"):
+        pairs_main(["--locator", str(tiny_locator), "--exclude", "89", "--out", str(tmp_path), "--device", "cpu"])
+
+
+def test_ink_box_finds_a_digit_on_a_plain_shirt():
+    image = digit_image(ink=230, shirt=40).float() / 255
+    centre = ((DIGIT_BOX[0] + DIGIT_BOX[2]) / 2, (DIGIT_BOX[1] + DIGIT_BOX[3]) / 2)
+
+    box, kit = ink_box(image, centre)
+
+    assert box == DIGIT_BOX
+    assert kit.tolist() == pytest.approx([40 / 255] * 3, abs=1e-3)
+    assert keep(box, centre, 0.95, MIN_PROB)
+    assert not keep(box, centre, 0.5, MIN_PROB)  # the locator is not sure
+    assert not keep(box, (10, 10), 0.95, MIN_PROB)  # the box misses the evidence centre
+    assert not keep([40, 80, 52, 90], (45, 85), 0.95, MIN_PROB)  # too short for a digit
+
+
+def test_spliced_boxes_follow_the_augmentation(tmp_path):
+    data = tmp_path / "data"
+    kept = {"4/a/0": 3, "9/c/0": 3}
+    for sequence_id in kept:
+        folder = data / sequence_id
+        folder.mkdir(parents=True)
+        image = Image.fromarray(digit_image().permute(1, 2, 0).numpy())
+        for name in ("1_1_0.png", "1_2_0.png", "1_3_0.png", "1_0_0_anchor.jpg"):
+            image.save(folder / name)
+    bank = StripBank(fake_strips(tmp_path / "strips.json", kept))
+    dataset = JerseyDataset(data, list(kept), augment=True, load_anchor=True, max_frames=4, pairs=bank, pair_share=1.0)
+    torch.manual_seed(0)
+
+    checked = 0
+    for _ in range(30):
+        item = dataset[0]
+        # Ink is far from the shirt's colour whatever the colour augmentation did.
+        frame = denormalize(item["frames"][0]).mean(dim=0)
+        ink = ((frame - frame.median()).abs() > 0.25).nonzero()
+        if len(ink) < 50:  # blurred or squeezed out of sight: nothing to compare
+            continue
+        boxes = item["boxes"][0]
+        assert ink[:, 1].min() >= boxes[0, 0] - 3 and ink[:, 1].max() < boxes[1, 2] + 3
+        assert ink[:, 0].min() >= boxes[:, 1].min() - 3 and ink[:, 0].max() < boxes[:, 3].max() + 3
+        checked += 1
+    assert checked > 10
+
+
+def test_real_pairs_false_drops_real_two_digit_sequences(tmp_path):
+    for sequence_id in ("4/a/0", "49/b/0"):
+        fake_sequence_dir(tmp_path, sequence_id, [1, 2])
+
+    assert JerseyDataset(tmp_path, ["4/a/0", "49/b/0"], real_pairs=False).sequence_ids == ["4/a/0"]
+    assert len(JerseyDataset(tmp_path, ["4/a/0", "49/b/0"])) == 2
 
 
 def test_train_refuses_a_bank_that_could_splice_a_held_out_number(tiny_runs, tmp_path):
@@ -1050,3 +1144,50 @@ def test_train_with_spliced_pairs(tiny_runs, tmp_path):
 
     config = json.loads((tmp_path / "runs" / "pairs" / "config.json").read_text())
     assert config["synthetic_pairs"] == 1.0
+
+
+# --- Local digit reader (locator) ---------------------------------------------------------------
+
+def test_locator_gives_ten_scores_per_cell():
+    model = LocalDigitReader(pretrained=False).eval()
+    scores = model(torch.randn(2, 3, *IMAGE_SIZE))
+
+    assert scores.shape == (2, 10, IMAGE_SIZE[0] // CELL_STRIDE, IMAGE_SIZE[1] // CELL_STRIDE)
+
+
+def test_crop_score_is_mean_of_top_cells_inside_the_torso():
+    rows, columns = IMAGE_SIZE[0] // CELL_STRIDE, IMAGE_SIZE[1] // CELL_STRIDE
+    inside = torso_cells(rows, columns)
+    cells = torch.zeros(1, 10, rows, columns)
+    cells[0, 3][~inside] = 100.0  # strong scores outside the torso must not count
+    torso = inside.nonzero()
+    for r, c in torso[:TOP_CELLS].tolist():
+        cells[0, 3, r, c] = 2.0
+    cells[0, 3, torso[TOP_CELLS, 0], torso[TOP_CELLS, 1]] = 1.0  # the ninth best is left out
+
+    scores = crop_scores(cells)
+
+    assert inside.any() and not inside.all()
+    assert scores[0, 3].item() == pytest.approx(2.0)
+    assert scores[0, 0].item() == 0
+
+
+def test_train_locator_leaves_out_held_out_partners_and_saves_a_run(tiny_runs, tmp_path):
+    root = tiny_runs.parent
+    locator_main([
+        "--epochs", "1", "--batch-size", "2", "--no-pretrained", "--workers", "0", "--device", "cpu",
+        "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--issues", str(root / "data_issues.json"),
+        "--out", str(tmp_path / "locator"), "--run-name", "loc", "--exclude", "49",
+    ])
+    run = tmp_path / "locator" / "loc"
+
+    config = json.loads((run / "config.json").read_text())
+    assert config["linked_dropped"] == ["4/f/0"] and config["sequences"] == {"train": 1, "val": 1}
+    history = json.loads((run / "history.json").read_text())
+    assert [entry["epoch"] for entry in history["epochs"]] == [0, 1]
+    model, config, epoch = load_locator(run)
+    assert epoch == 1 and not model.training
+    with pytest.raises(FileExistsError):  # never overwrites a run
+        locator_main(["--epochs", "1", "--no-pretrained", "--workers", "0", "--device", "cpu",
+                      "--data", str(root / "data"), "--splits", str(root / "splits.json"),
+                      "--out", str(tmp_path / "locator"), "--run-name", "loc"])

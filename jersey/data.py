@@ -16,9 +16,10 @@ import json
 from PIL import Image
 import torch
 from torch.utils.data import Dataset, WeightedRandomSampler
+from torchvision import tv_tensors
 from torchvision.transforms import v2
 
-from jersey.pairs import splice
+from jersey.pairs import GAP, splice
 
 IMAGE_SUFFIXES = {".jpg", ".png"}
 # Height, width. Crops are about 87 x 38 pixels (median), about 2.3:1, so 2:1 stretches
@@ -30,6 +31,10 @@ MAX_FRAMES = 10
 BLANK = 10
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+# Where the number is in a player crop, as shares of height and width: below the head,
+# above the shorts. Checked by eye on check_shortcuts.py's shortcuts_val.png.
+TORSO_ROWS = (0.15, 0.55)
+TORSO_COLUMNS = (0.1, 0.9)
 
 # No flips: a mirrored digit is a different or invalid digit.
 GEOMETRY = v2.RandomAffine(degrees=5, translate=(0.1, 0.1), scale=(0.9, 1.1))
@@ -82,6 +87,15 @@ def denormalize(images: torch.Tensor) -> torch.Tensor:
     mean = torch.tensor(IMAGENET_MEAN, device=images.device)[:, None, None]
     std = torch.tensor(IMAGENET_STD, device=images.device)[:, None, None]
     return (images * std + mean).clamp(0, 1)
+
+
+def torso_mask(height: int, width: int) -> torch.Tensor:
+    """True on the number area of a crop: (H, W)."""
+    mask = torch.zeros(height, width, dtype=torch.bool)
+    rows = slice(round(TORSO_ROWS[0] * height), round(TORSO_ROWS[1] * height))
+    columns = slice(round(TORSO_COLUMNS[0] * width), round(TORSO_COLUMNS[1] * width))
+    mask[rows, columns] = True
+    return mask
 
 
 def run_splits(run_dir: str | Path, fallback: str | Path) -> dict[str, list[str]]:
@@ -224,14 +238,20 @@ class JerseyDataset(Dataset):
     load_anchor adds the anchor, for training and the anchor-only baseline.
     Both off gives the repeatable input used for evaluation.
     pairs (a jersey.pairs.StripBank) with augment turns a share pair_share of the single-digit
-    sequences into two-digit ones, spliced with a kit-near partner before augmentation.
+    sequences into two-digit ones, spliced with a kit-near partner before augmentation. Without
+    augment nothing is spliced, so validation and evaluation see real sequences only.
+    real_pairs=False drops the real two-digit sequences (stage 1 of the two-step reader).
 
     Each item is a dict with:
-        frames      (max_frames, 3, H, W), zero-padded
-        mask        (max_frames,), True for real frames
-        label       (2,), first and second digit class in reading order
-        sequence_id "number/player/sequence", for reviewing errors
-        anchor      (3, H, W), only with load_anchor
+        frames       (max_frames, 3, H, W), zero-padded
+        mask         (max_frames,), True for real frames
+        label        (2,), first and second digit class in reading order
+        sequence_id  "number/player/sequence", for reviewing errors
+        boxes        (max_frames, 2, 4), [left, top, right, bottom] of each digit in reading order,
+                     after augmentation; zero unless has_boxes
+        has_boxes    (), True for spliced sequences, whose digit boxes are known
+        anchor       (3, H, W), only with load_anchor
+        anchor_boxes (2, 4), only with load_anchor
 
     Raises:
         ValueError: a sequence is malformed. Checked here, so it fails before training starts.
@@ -248,9 +268,12 @@ class JerseyDataset(Dataset):
         policy: str = "strong",
         pairs=None,
         pair_share: float = 0.0,
+        real_pairs: bool = True,
     ):
         self.data_dir = Path(data_dir)
-        self.sequence_ids = list(sequence_ids)
+        self.sequence_ids = [
+            sequence_id for sequence_id in sequence_ids if real_pairs or len(sequence_id.split("/")[0]) == 1
+        ]
         self.samples = [_index_sequence(self.data_dir, sequence_id) for sequence_id in self.sequence_ids]
         self.augment = augment
         self.transform = AUGMENTS[policy]
@@ -267,6 +290,7 @@ class JerseyDataset(Dataset):
         spliced = None
         if self.augment and self.pairs is not None and torch.rand(()).item() < self.pair_share:
             spliced = self._splice(self.sequence_ids[index])
+        boxes = None
         if spliced is None:
             anchor_path, frame_paths, label = self.samples[index]
             picked = _pick_frames(len(frame_paths), self.max_frames, at_random=self.augment)
@@ -275,28 +299,39 @@ class JerseyDataset(Dataset):
                 paths.append(anchor_path)
             images = torch.stack([_load_image(path, self.resize) for path in paths])
         else:
-            images, label = spliced
+            images, label, boxes = spliced
 
-        if self.augment:
+        if self.augment and boxes is None:
             # One call on the whole stack, so every frame and the anchor get the same augmentation.
             images = self.transform(images)
+        elif self.augment:
+            # The boxes go through the same call, so they move with the geometry.
+            boxes = tv_tensors.BoundingBoxes(boxes.reshape(-1, 4), format="XYXY", canvas_size=images.shape[-2:])
+            images, boxes = self.transform(images, boxes)
+            boxes = boxes.as_subclass(torch.Tensor).reshape(len(images), 2, 4)
         images = NORMALIZE(images)
+        if boxes is None:
+            boxes = torch.zeros(len(images), 2, 4)
 
         if self.load_anchor:
             images, anchor = images[:-1], images[-1]
+            boxes, anchor_boxes = boxes[:-1], boxes[-1]
         frames, mask = _pad(images, self.max_frames)
         item = {
             "frames": frames,
             "mask": mask,
             "label": torch.tensor(label),
             "sequence_id": self.sequence_ids[index],
+            "boxes": _pad(boxes, self.max_frames)[0],
+            "has_boxes": torch.tensor(spliced is not None),
         }
         if self.load_anchor:
             item["anchor"] = anchor
+            item["anchor_boxes"] = anchor_boxes
         return item
 
     def _splice(self, sequence_id):
-        """Stacked uint8 images (frames, then anchor) and label of a spliced two-digit version.
+        """Stacked uint8 images (frames, then anchor), label and digit boxes (n, 2, 4) of a spliced version.
 
         None when the sequence has two digits, too few found digits, or no allowed partner.
         """
@@ -318,13 +353,16 @@ class JerseyDataset(Dataset):
             anchors = (self.pairs.anchors[sequence_id], self.pairs.anchors[partner_id])
             # Without a found digit in both anchors, the first spliced frame stands in.
             pairs.append(anchors if None not in anchors else pairs[0])
-        images = torch.stack([
-            splice(self._load(a_name), a_centre, self._load(b_name), b_centre, a_left)
-            for (a_name, a_centre), (b_name, b_centre) in pairs
-        ])
+        gap = torch.randint(GAP[0], GAP[1] + 1, ()).item()  # one spacing for the whole sequence
+        spliced = [
+            splice(self._load(a_name), a_box, self._load(b_name), b_box, a_left, gap)
+            for (a_name, a_box), (b_name, b_box) in pairs
+        ]
+        images = torch.stack([image for image, _ in spliced])
+        boxes = torch.stack([found for _, found in spliced])
         digit, partner_digit = int(sequence_id.split("/")[0]), int(partner_id.split("/")[0])
         label = (digit, partner_digit) if a_left else (partner_digit, digit)
-        return images, label
+        return images, label, boxes
 
     def _load(self, name):
         return _load_image(self.data_dir / name, self.resize)

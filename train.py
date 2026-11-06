@@ -22,6 +22,13 @@ The best epoch is the one with the lowest val loss, not the best macro accuracy:
 them flips, and in practice picked epochs with clearly lower accuracy (see metrics.py).
 This rule is fixed and saved in config.json as selected_by. Val loss is dominated by the
 common one-digit numbers, so val two-digit accuracy is always reported beside it.
+
+--reader two-step trains the two-step reader (jersey/model.py) in two stages:
+    stage 1  --no-real-pairs --synthetic-pairs 0.5: singles and spliced pairs only, the best
+             epoch by the highest pair_accuracy on --val-pairs (jersey/pair_check.py), since
+             val loss has hardly any two-digit numbers to judge reading digit by digit
+    stage 2  --init-from <stage 1 run>: all real data at lower rates, best by val loss
+--val-pairs adds the pair metrics to history.json for any run, of either reader.
 """
 
 from datetime import datetime
@@ -41,25 +48,32 @@ from torch.utils.data import DataLoader
 from torchvision.utils import make_grid, save_image
 
 from jersey.data import AUGMENTS, MAX_FRAMES, JerseyDataset, denormalize, filter_numbers, held_out_partners, make_sampler
-from jersey.engine import ANCHOR_WEIGHT, evaluate, train_one_epoch
+from jersey.engine import ANCHOR_WEIGHT, ATTENTION_WEIGHT, COUNT_WEIGHT, evaluate, train_one_epoch
 from jersey.explain import explain_run
 from jersey.metrics import (
     band_accuracy, confusions, majority_baseline, per_number, scores, shot_bands,
 )
-from jersey.model import VARIANTS, JerseyModel
+from jersey.model import READERS, VARIANTS, JerseyModel
+from jersey.pair_check import build_pair_set, pair_metrics
 from jersey.pairs import StripBank
 
 # 7.5% of the steps warm up, as in PARSeq.
 WARMUP_SHARE = 0.075
 # Loss of a uniform guess: 10 classes for the first digit, 11 for the second.
 UNIFORM_LOSS = (math.log(10) + math.log(11)) / 2
-# The history key that picks the best epoch, lowest wins. Not a setting: fixed for every run.
+# The history key that picks the best epoch, and whether lowest or highest wins. Not a
+# setting: fixed per kind of run. Without real pairs val loss barely measures two-digit
+# reading, so stage 1 is judged on the spliced val pairs.
 SELECTED_BY = "val_loss"
+SELECTED_BY_NO_REAL_PAIRS = "pair_accuracy"
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--variant", choices=VARIANTS, default="full")
+    parser.add_argument("--reader", choices=READERS, default="fused",
+                        help="fused: the first reader; two-step: deep features choose where, local features what")
+    parser.add_argument("--init-from", help="run folder under --out to start from, e.g. a stage 1 run")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=32)
     # 10:1 between the new parts and the pretrained backbone, as in DETR.
@@ -83,7 +97,13 @@ def parse_args(argv=None):
     parser.add_argument("--synthetic-pairs", type=float, default=0.0,
                         help="share of single-digit training samples spliced into two-digit ones (jersey/pairs.py)")
     parser.add_argument("--pairs", type=Path, default=Path("results/pairs/strips.json"),
-                        help="make_pairs.py's output, read only with --synthetic-pairs")
+                        help="make_pairs.py --split train output, read only with --synthetic-pairs")
+    parser.add_argument("--no-real-pairs", action="store_true",
+                        help="train without real two-digit sequences (stage 1); picks the best epoch by pair_accuracy")
+    parser.add_argument("--val-pairs", type=Path,
+                        help="make_pairs.py --split val output: score spliced val pairs every epoch (jersey/pair_check.py)")
+    parser.add_argument("--attention-weight", type=float, default=ATTENTION_WEIGHT, help="two-step reader only")
+    parser.add_argument("--count-weight", type=float, default=COUNT_WEIGHT, help="two-step reader only")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
@@ -172,6 +192,28 @@ def load_pairs(args, exclude, train_ids):
     return bank
 
 
+def init_from(model, args, exclude):
+    """Load the weights of run --init-from into model, after checking they cannot leak.
+
+    Raises:
+        ValueError: the run used another reader, variant or split, or did not hold out
+            every number this run holds out (its weights would have seen them).
+    """
+    run_dir = args.out / args.init_from
+    checkpoint = torch.load(run_dir / "best.pt", map_location="cpu")
+    config = checkpoint["config"]
+    if config.get("reader", "fused") != args.reader or config["variant"] != args.variant:
+        raise ValueError(f"{run_dir} is a {config.get('reader', 'fused')} {config['variant']} run, "
+                         f"not {args.reader} {args.variant}")
+    missing = set(exclude) - set(config["exclude"])
+    if missing:
+        raise ValueError(f"{run_dir} did not hold out {sorted(missing)}, so its weights saw them")
+    if json.loads((run_dir / "splits.json").read_text()) != json.loads(args.splits.read_text()):
+        raise ValueError(f"{run_dir} was trained with another split than {args.splits}")
+    model.load_state_dict(checkpoint["model"])
+    print(f"starting from {run_dir}, epoch {checkpoint['epoch']}")
+
+
 def make_loader(dataset, args, device, sampler=None):
     return DataLoader(
         dataset,
@@ -193,22 +235,32 @@ def main(argv=None):
     exclude = tuple(args.exclude)
     train_ids, linked = training_ids(splits, exclude, args.issues)
     val_ids = filter_numbers(splits["val"], exclude)
-    picked = torch.randperm(len(train_ids), generator=torch.Generator().manual_seed(args.seed))
-    check_ids = sorted(train_ids[i] for i in picked[:args.train_check_size].tolist())
+    if args.no_real_pairs and args.val_pairs is None:
+        raise ValueError("--no-real-pairs picks the best epoch by pair_accuracy, so it needs --val-pairs")
+    selected_by = SELECTED_BY_NO_REAL_PAIRS if args.no_real_pairs else SELECTED_BY
+    higher_wins = selected_by == SELECTED_BY_NO_REAL_PAIRS
     pairs = load_pairs(args, exclude, train_ids) if args.synthetic_pairs > 0 else None
+    pair_set = None
+    if args.val_pairs is not None:
+        pair_set = build_pair_set(args.val_pairs, val_ids, exclude, args.data, seed=args.seed)
+        print(f"pair metric on {len(pair_set['labels'])} spliced val pairs from {args.val_pairs}")
 
     def dataset(ids, **options):
         return JerseyDataset(args.data, ids, max_frames=args.max_frames, **options)
 
-    train_loader = make_loader(
-        dataset(train_ids, augment=True, load_anchor=True, policy=args.augment,
-                pairs=pairs, pair_share=args.synthetic_pairs),
-        args, device, sampler=make_sampler(train_ids, args.sampler_power),
-    )
+    train_set = dataset(train_ids, augment=True, load_anchor=True, policy=args.augment,
+                        pairs=pairs, pair_share=args.synthetic_pairs, real_pairs=not args.no_real_pairs)
+    # The sequences actually trained on, so sampler, train-check and shot bands agree with the dataset.
+    fit_ids = train_set.sequence_ids
+    picked = torch.randperm(len(fit_ids), generator=torch.Generator().manual_seed(args.seed))
+    check_ids = sorted(fit_ids[i] for i in picked[:args.train_check_size].tolist())
+    train_loader = make_loader(train_set, args, device, sampler=make_sampler(fit_ids, args.sampler_power))
     check_loader = make_loader(dataset(check_ids), args, device)
     val_loader = make_loader(dataset(val_ids), args, device)
 
-    model = JerseyModel(args.variant, max_frames=args.max_frames, pretrained=not args.no_pretrained)
+    model = JerseyModel(args.variant, max_frames=args.max_frames, pretrained=not args.no_pretrained, reader=args.reader)
+    if args.init_from:
+        init_from(model, args, exclude)
     model.to(device)
     backbone = [p for name, p in model.named_parameters() if name.startswith("backbone.")]
     rest = [p for name, p in model.named_parameters() if not name.startswith("backbone.")]
@@ -237,10 +289,11 @@ def main(argv=None):
         # A plain str: torch's own version type would block loading best.pt with weights_only.
         "torch": str(torch.__version__),
         "parameters": sum(p.numel() for p in model.parameters()),
-        "sequences": {"train": len(train_ids), "train_check": len(check_ids), "val": len(val_ids)},
+        "sequences": {"train": len(fit_ids), "train_check": len(check_ids), "val": len(val_ids)},
         # Train sequences of other numbers left out of a hold-out run, for evaluate.py.
         "linked_dropped": sorted(linked),
-        "selected_by": SELECTED_BY,
+        "selected_by": selected_by,
+        "selected_highest": higher_wins,
     }
     (run_dir / "config.json").write_text(json.dumps(config, indent=2))
     print(f"run {run_dir}, {config['parameters']:,} parameters on {device}")
@@ -251,6 +304,7 @@ def main(argv=None):
         """Return the history entry for an epoch, scoring train-check and val."""
         check = scores(evaluate(model, check_loader, device))
         val = scores(evaluate(model, val_loader, device))
+        found = pair_metrics(model, pair_set, device) if pair_set is not None else {}
         return {
             "epoch": epoch,
             "lr": optimizer.param_groups[0]["lr"],
@@ -258,23 +312,37 @@ def main(argv=None):
             "train_loss": train_loss,
             **{f"train_check_{key}": value for key, value in check.items()},
             **{f"val_{key}": value for key, value in val.items()},
+            **found,
             "seconds": time.perf_counter() - start,
         }
+
+    def pair_text(entry):
+        if pair_set is None:
+            return ""
+        return (f"  pairs {entry['pair_accuracy']:.3f} second right {entry['second_is_right']:.3f}"
+                f" left {entry['second_is_left']:.3f} gap {entry['left_right_gap']:.2f}"
+                f" singles {entry['singles_accuracy']:.3f}")
 
     # Before training the model should guess about uniformly. A loss far from
     # UNIFORM_LOSS points to a bug in the init, the labels or the loss (Karpathy's recipe).
     history, best = [score_epoch(0, None, time.perf_counter())], None
     print(f"epoch  0/{args.epochs}  val loss {history[0]['val_loss']:.3f}"
           f" (uniform guess {UNIFORM_LOSS:.3f})  two-digit {history[0]['val_two_digit_accuracy']:.3f}"
-          f"  val acc {history[0]['val_accuracy']:.3f}")
+          f"  val acc {history[0]['val_accuracy']:.3f}{pair_text(history[0])}")
 
     for epoch in range(1, args.epochs + 1):
         start = time.perf_counter()
-        train_loss = train_one_epoch(model, train_loader, optimizer, device, args.anchor_weight, scheduler)
+        train_loss = train_one_epoch(model, train_loader, optimizer, device, args.anchor_weight, scheduler,
+                                     args.attention_weight, args.count_weight)
         current = score_epoch(epoch, train_loss, start)
         history.append(current)
 
-        improved = best is None or current[SELECTED_BY] < best[SELECTED_BY]
+        if best is None:
+            improved = True
+        elif higher_wins:
+            improved = current[selected_by] > best[selected_by]
+        else:
+            improved = current[selected_by] < best[selected_by]
         if improved:
             best = current
             # Weights on the CPU, so they load on any machine. The config says how to
@@ -293,17 +361,18 @@ def main(argv=None):
             f"  val loss {current['val_loss']:.3f} two-digit {current['val_two_digit_accuracy']:.3f}"
             f" acc {current['val_accuracy']:.3f}"
             f" macro {current['val_macro_accuracy']:.3f} macro5 {current['val_macro_accuracy_5']:.3f}"
-            f"  {current['seconds']:.0f}s{'  *' if improved else ''}"
+            f"{pair_text(current)}  {current['seconds']:.0f}s{'  *' if improved else ''}"
         )
 
-    print(f"best epoch {best['epoch']} by lowest {SELECTED_BY}: val loss {best['val_loss']:.3f},"
+    print(f"best epoch {best['epoch']} by {'highest' if higher_wins else 'lowest'} {selected_by}:"
+          f" val loss {best['val_loss']:.3f},"
           f" two-digit {best['val_two_digit_accuracy']:.3f}, accuracy {best['val_accuracy']:.3f},"
-          f" macro {best['val_macro_accuracy']:.3f}, macro5 {best['val_macro_accuracy_5']:.3f}")
+          f" macro {best['val_macro_accuracy']:.3f}, macro5 {best['val_macro_accuracy_5']:.3f}{pair_text(best)}")
 
     # Score the best weights per number, the detail the history leaves out.
     model.load_state_dict(torch.load(run_dir / "best.pt")["model"])
     result = evaluate(model, val_loader, device)
-    train_numbers = [sequence_id.split("/")[0] for sequence_id in train_ids]
+    train_numbers = [sequence_id.split("/")[0] for sequence_id in fit_ids]
     table = per_number(result["predictions"], result["labels"])
     report = {
         "epoch": best["epoch"],

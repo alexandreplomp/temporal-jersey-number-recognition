@@ -21,6 +21,7 @@ from jersey.explain import (
     attention_check, frame_removal, frame_weights, map_similarity, occlusion_map, query_maps,
     temporal_attention, temporal_pass,
 )
+from jersey.pair_check import build_pair_set, pair_metrics
 from jersey.local_reader import TOP_CELLS, LocalDigitReader, crop_scores, load_locator, torso_cells
 from jersey.metrics import (
     band_accuracy, confusions, count_flips, heldout_error_share, macro, majority_baseline,
@@ -1341,3 +1342,127 @@ def test_two_step_training_overfits_one_batch():
     # random frames, as in test_training_overfits_one_batch.
     with torch.no_grad():
         assert torch.equal(predict_digits(model(frames, mask)["logits"])[0], labels)
+
+
+@pytest.fixture(scope="module")
+def two_step_runs(tmp_path_factory):
+    """Stage 1 and stage 2 two-step runs on fake data holding out 49, with train and val digit boxes."""
+    root = tmp_path_factory.mktemp("two_step")
+    sequences = {"train": ["4/a/0", "9/b/0", "8/e/0", "89/w/0", "49/x/0"], "val": ["4/c/0", "9/d/0", "49/y/0"],
+                 "test": ["4/g/0", "49/z/0"]}
+    for sequence_id in sum(sequences.values(), []):
+        fake_sequence_dir(root / "data", sequence_id, [1, 2, 3], noise=True)
+    (root / "splits.json").write_text(json.dumps(sequences))
+    (root / "data_issues.json").write_text(json.dumps(NO_ISSUES))
+    train_strips = fake_strips(root / "train_strips.json", {"4/a/0": 3, "9/b/0": 3, "8/e/0": 3}, exclude=("49",))
+    val_strips = fake_strips(root / "val_strips.json", {"4/c/0": 3, "9/d/0": 3}, exclude=("49",), split="val")
+    common = [
+        "--reader", "two-step", "--variant", "averaged", "--epochs", "2", "--batch-size", "2", "--max-frames", "4",
+        "--train-check-size", "2", "--no-pretrained", "--workers", "0", "--device", "cpu",
+        "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--issues", str(root / "data_issues.json"),
+        "--out", str(root / "runs"), "--exclude", "49", "--pairs", str(train_strips), "--val-pairs", str(val_strips),
+    ]
+    train_main([*common, "--run-name", "s1", "--no-real-pairs", "--synthetic-pairs", "0.5"])
+    train_main([*common, "--run-name", "s2", "--init-from", "s1", "--synthetic-pairs", "0.3"])
+    return root
+
+
+def test_stage_one_trains_without_real_pairs_and_picks_by_pair_accuracy(two_step_runs):
+    run = two_step_runs / "runs" / "s1"
+    config = json.loads((run / "config.json").read_text())
+    history = json.loads((run / "history.json").read_text())
+
+    assert config["reader"] == "two-step" and config["selected_by"] == "pair_accuracy" and config["selected_highest"]
+    assert config["sequences"]["train"] == 3  # 4, 9 and 8: not the real 89, nor the held-out 49
+    assert all({"pair_accuracy", "second_is_right", "second_is_left", "left_right_gap", "singles_accuracy"} <= set(entry)
+               for entry in history["epochs"])
+    highest = max(history["epochs"][1:], key=lambda entry: entry["pair_accuracy"])
+    assert history["best"]["pair_accuracy"] == highest["pair_accuracy"]
+    model, _, _ = load_run(run)
+    assert model.reader == "two-step"
+
+
+def test_stage_two_starts_from_stage_one_and_picks_by_val_loss(two_step_runs):
+    config = json.loads((two_step_runs / "runs" / "s2" / "config.json").read_text())
+
+    assert config["init_from"] == "s1" and config["selected_by"] == "val_loss" and not config["selected_highest"]
+    assert config["sequences"]["train"] == 4  # the real 89 is back; the held-out 49 is not
+
+
+def test_init_from_refuses_a_run_that_did_not_hold_out_the_same_numbers(two_step_runs, tmp_path):
+    root = two_step_runs
+    with pytest.raises(ValueError, match="did not hold out"):
+        train_main([
+            "--reader", "two-step", "--variant", "averaged", "--epochs", "1", "--max-frames", "4", "--no-pretrained",
+            "--workers", "0", "--device", "cpu", "--data", str(root / "data"), "--splits", str(root / "splits.json"),
+            "--issues", str(root / "data_issues.json"), "--out", str(root / "runs"), "--run-name", "bad",
+            "--exclude", "49", "89", "--init-from", "s1",
+        ])
+    with pytest.raises(ValueError, match="is a two-step averaged run"):
+        train_main([
+            "--variant", "averaged", "--epochs", "1", "--max-frames", "4", "--no-pretrained", "--workers", "0",
+            "--device", "cpu", "--data", str(root / "data"), "--splits", str(root / "splits.json"),
+            "--issues", str(root / "data_issues.json"), "--out", str(root / "runs"), "--run-name", "bad2",
+            "--exclude", "49", "--init-from", "s1",
+        ])
+
+
+def test_evaluate_reports_how_held_out_answers_fail(two_step_runs):
+    evaluate_main(["s2", "--runs", str(two_step_runs / "runs"), "--device", "cpu", "--workers", "0"])
+
+    metrics = json.loads((two_step_runs / "runs" / "s2" / "metrics_val.json").read_text())
+    held = metrics["hold_out"]
+    assert metrics["run"]["reader"] == "two-step"
+    assert held["sequences"] == 2 and sum(held["answer_counts"].values()) == 2
+    assert 0 <= held["one_digit_share"] <= 1 and 0 <= held["first_digit_hits"] <= 1
+    assert 0 <= held["second_digit_hits"] <= 1
+
+
+def test_check_shortcuts_runs_on_a_two_step_run(two_step_runs):
+    shortcuts_main(["s2", "--runs", str(two_step_runs / "runs"), "--device", "cpu", "--workers", "0"])
+
+    assert (two_step_runs / "runs" / "s2" / "shortcuts_val.json").exists()
+
+
+def test_pair_set_uses_validation_players_only_and_never_a_held_out_number(two_step_runs):
+    root = two_step_runs
+    val_ids = ["4/c/0", "9/d/0", "49/y/0"]
+
+    found = build_pair_set(root / "val_strips.json", val_ids, ("49",), root / "data", count=20, seed=1)
+    again = build_pair_set(root / "val_strips.json", val_ids, ("49",), root / "data", count=20, seed=1)
+
+    assert {decode_label(*label) for label in found["labels"].tolist()} == {"94"}
+    assert {sequence for pair in found["sequences"] for sequence in pair} <= set(val_ids)
+    assert torch.equal(found["images"], again["images"])  # a fixed set
+    assert found["single_labels"][:, 1].eq(BLANK).all()
+    with pytest.raises(ValueError, match="val boxes only"):
+        build_pair_set(root / "train_strips.json", val_ids, ("49",), root / "data")
+    with pytest.raises(ValueError, match="outside val"):
+        build_pair_set(root / "val_strips.json", ["4/c/0"], ("49",), root / "data")
+    with pytest.raises(ValueError, match="without holding out"):
+        build_pair_set(root / "val_strips.json", val_ids, ("49", "89"), root / "data")
+
+
+@pytest.mark.parametrize("reader", READERS)
+def test_pair_metrics_for_either_reader(two_step_runs, reader):
+    root = two_step_runs
+    pair_set = build_pair_set(root / "val_strips.json", ["4/c/0", "9/d/0"], ("49",), root / "data", count=6)
+    model = JerseyModel("averaged", pretrained=False, reader=reader)
+
+    found = pair_metrics(model, pair_set, "cpu")
+
+    assert set(found) == {"pair_accuracy", "second_is_right", "second_is_left", "left_right_gap", "singles_accuracy"}
+    assert found["second_is_right"] + found["second_is_left"] <= 1  # the two digits differ
+    assert math.isfinite(found["left_right_gap"])
+
+
+def test_train_refuses_val_boxes_for_training(tiny_runs, tmp_path):
+    bank = fake_strips(tmp_path / "strips.json", {"4/a/0": 3}, split="val")
+    root = tiny_runs.parent
+
+    with pytest.raises(ValueError, match="only train boxes"):
+        train_main([
+            "--epochs", "1", "--no-pretrained", "--workers", "0", "--device", "cpu", "--max-frames", "4",
+            "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--out", str(tmp_path / "runs"),
+            "--synthetic-pairs", "0.5", "--pairs", str(bank),
+        ])

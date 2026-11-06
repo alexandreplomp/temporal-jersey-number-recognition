@@ -24,7 +24,7 @@ validate.py --results-file). Re-evaluating a run replaces its row.
 The test split is scored once per run: a second --split test stops.
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 import argparse
 import csv
@@ -180,12 +180,20 @@ def stability(rows):
 
 
 def hold_out(rows, train_numbers):
-    """Scores on numbers the run never trained on, and how often a wrong answer is a training number."""
+    """Scores on numbers the run never trained on, and how often a wrong answer is a training number.
+
+    Also how the answers fail: the share of one-digit answers (the second digit missed
+    entirely), how often each digit position is right on its own, and every answer given.
+    """
     labels = _digits(row["true"] for row in rows)
     predictions = _digits(row["sequence"] for row in rows)
     return {
         "sequences": len(rows),
         "accuracy": _mean(float(row["sequence"] == row["true"]) for row in rows),
+        "one_digit_share": _mean(float(len(row["sequence"]) == 1) for row in rows),
+        "first_digit_hits": (predictions[:, 0] == labels[:, 0]).float().mean().item(),
+        "second_digit_hits": (predictions[:, 1] == labels[:, 1]).float().mean().item(),
+        "answer_counts": dict(Counter(row["sequence"] for row in rows).most_common()),
         "per_number": per_number(predictions, labels),
         "wrong_answers_that_are_training_numbers": heldout_error_share(predictions, labels, train_numbers),
         "confusions": confusions(predictions, labels),
@@ -219,6 +227,7 @@ def evaluate_run(args, run_dir, device):
     metrics = {
         "run": {
             "name": run_dir.name, "split": args.split, "variant": config["variant"],
+            "reader": config.get("reader", "fused"),
             "max_frames": config["max_frames"], "epoch": epoch,
             "param_count": sum(p.numel() for p in model.parameters()),
         },
@@ -242,6 +251,12 @@ def evaluate_run(args, run_dir, device):
     metrics_path.write_text(json.dumps(metrics, indent=2))
     _update_results(args.runs.parent / f"results_{args.split}.csv", _summary_row(metrics))
     _print_table(metrics, rows, shot_bands(train_numbers))
+    if metrics["hold_out"] is not None:
+        held = metrics["hold_out"]
+        answers = ", ".join(f"{number} x{count}" for number, count in held["answer_counts"].items())
+        print(f"hold-out {', '.join(exclude)} ({held['sequences']} sequences): accuracy {held['accuracy']:.3f},"
+              f" one-digit answers {held['one_digit_share']:.3f}, first digit {held['first_digit_hits']:.3f},"
+              f" second digit {held['second_digit_hits']:.3f}; answers {answers}")
 
 
 def _summary_row(metrics):

@@ -55,7 +55,7 @@ The approaches are the table at the top of `train.py`; each row changes one thin
 | `two_step_mean` | Where-then-what reader, frames averaged |
 | `two_step_pool` | The same, with learned frame weights |
 | `two_step_full` | The same, frames see each other (transformer) |
-| `parseq_gate` | PARSeq-Tiny, a pretrained text reader, per frame; a learned gate per digit position over up to 8 frames; real data only |
+| `parseq_gate` | PARSeq-Tiny, a pretrained text reader, per frame; a learned gate per digit position over up to 10 frames; real data only |
 
 ## Results
 

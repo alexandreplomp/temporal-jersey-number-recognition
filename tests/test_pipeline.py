@@ -58,18 +58,26 @@ def test_prepare_splits_by_player_and_sends_rare_numbers_to_train(tmp_path):
     assert {number_of(s) for s in splits["val"]} == {"4", "9"} and {number_of(s) for s in splits["train"]} >= {"88"}
 
 
-def test_two_stage_training_writes_both_stages_and_never_overwrites(pipeline):
+def test_two_stage_training_writes_both_stages_skips_finished_runs_and_refuses_unfinished_ones(pipeline):
     run = pipeline / "results" / "runs" / "two_step_mean_ex49"
     config = json.loads((run / "config.json").read_text())
     history = json.loads((run / "history.json").read_text())
 
-    assert {"best.pt", "history.json", "curves.png", "train_batch.png", "splits.json"} <= {p.name for p in run.iterdir()}
+    assert {"best.pt", "history.json", "curves.png", "train_batch.png", "splits.json", "done.json"} <= {p.name for p in run.iterdir()}
     assert (run / "stage1" / "best.pt").exists() and config["stage"]["selected_by"] == "val_loss"
     assert config["count_offset"] == pytest.approx(math.log(3))  # train has 4, 9, 8 and 89; 49 is held out
     assert history["epochs"][0]["step"] == 1 and "pair_accuracy" in history["epochs"][0]
-    with pytest.raises(SystemExit):
-        train_main(["--approach", "two_step_mean", "--exclude", "49", "--epochs", "1", "--no-pretrained",
-                    "--data", str(pipeline / "data"), *common(pipeline)])
+    args = ["--approach", "two_step_mean", "--exclude", "49", "--epochs", "1", "--no-pretrained",
+            "--data", str(pipeline / "data"), *common(pipeline)]
+    before = (run / "best.pt").stat().st_mtime
+    train_main(args)  # finished: skipped, never overwritten
+    assert (run / "best.pt").stat().st_mtime == before
+    (run / "done.json").rename(run / "done.json.bak")
+    try:
+        with pytest.raises(SystemExit, match="unfinished"):
+            train_main(args)
+    finally:
+        (run / "done.json.bak").rename(run / "done.json")
 
 
 def test_training_refuses_boxes_that_could_paste_a_held_out_number(pipeline, tmp_path):

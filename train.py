@@ -14,6 +14,7 @@ another seed). A two-stage approach writes stage 1 to <run>/stage1/ and starts s
     curves.png       loss, accuracy, two-digit and macro accuracy per epoch
     train_batch.png  one training batch as the model sees it, anchor last
     best.pt          {"model", "epoch", "config"} of the best epoch
+    done.json        written when every stage has finished; a finished run is skipped when asked again
 """
 
 from dataclasses import asdict, dataclass
@@ -74,8 +75,8 @@ APPROACHES = {
     "two_step_mean": Approach("two-step", "mean", 10, TWO_STAGES),
     "two_step_pool": Approach("two-step", "pool", 10, TWO_STAGES),
     "two_step_full": Approach("two-step", "transformer", 10, TWO_STAGES),
-    # PARSeq-Tiny per frame, two position queries, a learned gate per position over up to 8 frames.
-    "parseq_gate": Approach("parseq", "pool", 8, PARSEQ_STAGE),
+    # PARSeq-Tiny per frame, two position queries, a learned gate per position over up to 10 frames.
+    "parseq_gate": Approach("parseq", "pool", 10, PARSEQ_STAGE),
 }
 
 
@@ -176,8 +177,11 @@ def main(argv=None):
     approach, exclude = APPROACHES[args.approach], tuple(args.exclude)
     tag = tag_of(exclude)
     run_dir = args.results / "runs" / (f"{args.approach}_{tag}" + (f"_s{args.seed}" if args.seed else ""))
+    if (run_dir / "done.json").exists():
+        print(f"{run_dir} is already trained; skipping (results are never overwritten)")
+        return
     if run_dir.exists():
-        raise SystemExit(f"{run_dir} exists: results are never overwritten")
+        raise SystemExit(f"{run_dir} is an unfinished run (no done.json): delete it to train it again")
 
     splits = read_splits(args.results / "splits.json")
     issues = json.loads((args.results / "data_issues.json").read_text())
@@ -215,6 +219,8 @@ def main(argv=None):
         last = index == len(approach.stages) - 1
         history = train_stage(model, stage, run, run_dir if last else run_dir / f"stage{index + 1}", step, keep_start=index > 0)
         step = history[-1]["step"]
+    # Written last, so a run stopped halfway is never taken for a finished one.
+    (run_dir / "done.json").write_text(json.dumps({"epochs": step}))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Every step of the hand-in, in order: about 5-6 hours on an M-series Mac (MPS).
-# Run from the project root with the data in data/. Nothing here is ever overwritten: train.py
-# refuses an existing run folder and evaluate.py scores the test split only once per run.
+# Run from the project root with the data in data/. Nothing is ever overwritten, and the script can be
+# rerun after a stop: train.py skips finished runs (and refuses half-finished ones: delete those), and
+# each run is scored on the test split only once.
 set -euo pipefail
 
 uv run pytest
@@ -32,8 +33,9 @@ uv run train.py --approach "$FINAL"
 uv run evaluate.py "${FINAL}_all"
 
 # 5. The test split, once: the final model, and the held-out ladder (49 test sequences are never trained on).
-uv run evaluate.py "${FINAL}_all" single_frame_ex49 fused_ex49 two_step_mean_ex49 two_step_pool_ex49 two_step_full_ex49 \
-    parseq_gate_ex49 --split test
+for run in "${FINAL}_all" single_frame_ex49 fused_ex49 two_step_mean_ex49 two_step_pool_ex49 two_step_full_ex49 parseq_gate_ex49; do
+    [ -f "results/runs/$run/metrics_test.json" ] || uv run evaluate.py "$run" --split test
+done
 
 # 6. Ship the final weights (used by predict.py).
 mkdir -p weights/final

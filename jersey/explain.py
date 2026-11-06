@@ -120,24 +120,26 @@ def temporal_attention(model, frames, mask):
     if model.temporal is None:
         return None
     real = frames[mask]
-    return temporal_pass(model, model.read_tokens(real)[None])[1].cpu()
+    # The two-step reader's last two queries are the two digit positions (left, right).
+    return temporal_pass(model, model.read_tokens(real)[None])[1][-2:].cpu()
 
 
 def temporal_pass(model, tokens):
-    """Repeat model.temporal on tokens (1, R, 2, D) of real frames, keeping the attention.
+    """Repeat model.temporal on tokens (1, R, Q, D) of real frames, keeping the attention.
 
     nn.TransformerEncoderLayer never returns its attention weights, so its pre-norm steps
     are redone here from its own modules. Returns the output (1, R, 2, D), equal to
     model.temporal(tokens, mask), and the attention (2, R, R).
     """
     encoder, (_, R, _, D) = model.temporal, tokens.shape
-    x = tokens.transpose(1, 2).reshape(2, R, D) + encoder.frame_positions[:, :R]
+    Q = tokens.shape[2]
+    x = tokens.transpose(1, 2).reshape(Q, R, D) + encoder.frame_positions[:, :R]
     layer = encoder.layer
     normed = layer.norm1(x)
     attended, weights = layer.self_attn(normed, normed, normed, need_weights=True)
     x = x + attended
     x = x + layer._ff_block(layer.norm2(x))  # the layer's own feed-forward step; dropout is off in eval
-    return encoder.norm(x).reshape(1, 2, R, D).transpose(1, 2), weights
+    return encoder.norm(x).reshape(1, Q, R, D).transpose(1, 2), weights
 
 
 @torch.no_grad()
@@ -259,7 +261,8 @@ def explain_run(model, dataset, config, run_dir, device):
     # A fixed untrained model for the randomization check, without touching the training RNG.
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(config["seed"])
-        random_model = JerseyModel(config["variant"], max_frames=config["max_frames"], pretrained=False)
+        random_model = JerseyModel(config["variant"], max_frames=config["max_frames"], pretrained=False,
+                                   reader=config.get("reader", "fused"))
     random_model.to(device).eval()
     cases = [
         explain_sequence(model, random_model, dataset[index], device)

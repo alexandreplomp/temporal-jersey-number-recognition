@@ -8,6 +8,11 @@ the anchor-only comparison (use_anchor).
 
 frame_logits are not trained yet. To add a per-frame loss later, use
 frame_logits[mask], so padded frames add nothing.
+
+The two-step reader trains on its parts instead (two_step_loss): each query on the digit
+it should read, the count, and, where the digit boxes are known (spliced sequences), the
+left and right attention on their boxes. Its validation loss stays digit_loss on the
+composed output, so val losses compare between readers.
 """
 
 import math
@@ -15,9 +20,12 @@ import math
 import torch
 from torch.nn import functional as F
 
-from jersey.model import predict_digits
+from jersey.data import BLANK, IMAGE_SIZE
+from jersey.model import CELL_STRIDE, predict_digits
 
 ANCHOR_WEIGHT = 0.5  # a starting guess, to tune on val
+ATTENTION_WEIGHT = 0.5
+COUNT_WEIGHT = 1.0
 
 
 def digit_loss(logits, labels):
@@ -29,14 +37,70 @@ def digit_loss(logits, labels):
     return F.cross_entropy(logits.flatten(0, -2), labels.flatten())
 
 
-def train_one_epoch(model, loader, optimizer, device, anchor_weight=ANCHOR_WEIGHT, scheduler=None):
+def box_cells(boxes, grid=(IMAGE_SIZE[0] // CELL_STRIDE, IMAGE_SIZE[1] // CELL_STRIDE), stride=CELL_STRIDE):
+    """True for the cells a box overlaps: boxes (..., 4) as [left, top, right, bottom] -> (..., rows * columns).
+
+    Overlap rather than the cell centre, since a thin digit (6 pixels) can fall between centres.
+    """
+    rows, columns = grid
+    x0 = torch.arange(columns, device=boxes.device) * stride  # (columns,) left edge of each cell
+    y0 = torch.arange(rows, device=boxes.device) * stride
+    left, top, right, bottom = (boxes[..., i, None] for i in range(4))
+    across = (x0 < right) & (x0 + stride > left)  # (..., columns)
+    down = (y0 < bottom) & (y0 + stride > top)  # (..., rows)
+    return (down[..., :, None] & across[..., None, :]).flatten(-2)
+
+
+def two_step_loss(out, labels, boxes=None, has_boxes=None, frame_mask=None,
+                  attention_weight=ATTENTION_WEIGHT, count_weight=COUNT_WEIGHT):
+    """Loss of the two-step reader on a batch: the total and its parts (floats, for logging).
+
+    out is forward's dict (or read_frames_full's, with frame_mask None for single images):
+        digits     one-digit samples: cross-entropy of the single query on the digit;
+                   two-digit samples: the mean of left on the first and right on the second
+        count      cross-entropy on one or two digits, the two classes weighed equally
+        attention  where boxes are known (has_boxes): -log(attention inside the digit's box)
+                   for left and right, over the real frames
+    boxes (B, T, 2, 4) or (B, 2, 4) for single images; has_boxes (B,).
+    """
+    two = labels[:, 1] != BLANK
+    digit_logits = out["digit_logits"]
+    single = F.cross_entropy(digit_logits[:, 0], labels[:, 0], reduction="none")
+    left = F.cross_entropy(digit_logits[:, 1], labels[:, 0], reduction="none")
+    right = F.cross_entropy(digit_logits[:, 2], labels[:, 1].clamp(max=BLANK - 1), reduction="none")
+    digits = torch.where(two, (left + right) / 2, single).mean()
+
+    count_each = F.cross_entropy(out["count_logits"], two.long(), reduction="none")
+    count = torch.stack([count_each[two == kind].mean() for kind in (False, True) if (two == kind).any()]).mean()
+
+    total = digits + count_weight * count
+    parts = {"digits": digits.item(), "count": count.item(), "attention": 0.0}
+    if boxes is not None and has_boxes is not None and has_boxes.any() and attention_weight > 0:
+        attention = out["attention"]  # (B, T, 3, C), or (B, 3, C) for single images
+        if frame_mask is None:
+            attention, boxes = attention[:, None], boxes[:, None]
+            frame_mask = torch.ones(attention.shape[:2], dtype=torch.bool, device=attention.device)
+        inside = box_cells(boxes)  # (B, T, 2, C)
+        found = (attention[:, :, 1:] * inside).sum(dim=-1)  # (B, T, 2): left on box 1, right on box 2
+        valid = (frame_mask & has_boxes[:, None])[..., None] & inside.any(dim=-1)  # (B, T, 2)
+        if valid.any():
+            attended = -torch.log(found[valid] + 1e-6).mean()
+            total = total + attention_weight * attended
+            parts["attention"] = attended.item()
+    return total, parts
+
+
+def train_one_epoch(model, loader, optimizer, device, anchor_weight=ANCHOR_WEIGHT, scheduler=None,
+                    attention_weight=ATTENTION_WEIGHT, count_weight=COUNT_WEIGHT):
     """Train for one pass over loader and return the mean sequence loss per sequence.
 
     The returned loss is for monitoring only. It comes from sampled, augmented batches
     with dropout on, so it does not compare with evaluate. For train-vs-val curves, run
     evaluate on a fixed, unaugmented subset of train.
 
-    scheduler, if given, steps after every batch, as OneCycleLR expects.
+    scheduler, if given, steps after every batch, as OneCycleLR expects. attention_weight and
+    count_weight are used by the two-step reader only (two_step_loss); its returned loss is
+    still digit_loss on the composed output, so it compares with the fused reader's.
 
     Raises:
         RuntimeError: the loss is not finite, before the update spreads it to the weights.
@@ -48,11 +112,23 @@ def train_one_epoch(model, loader, optimizer, device, anchor_weight=ANCHOR_WEIGH
         mask = batch["mask"].to(device, non_blocking=True)
         labels = batch["label"].to(device, non_blocking=True)
 
-        sequence_loss = digit_loss(model(frames, mask)["logits"], labels)
-        loss = sequence_loss
-        if "anchor" in batch:
-            anchor = batch["anchor"].to(device, non_blocking=True)
-            loss = loss + anchor_weight * digit_loss(model.read_frames(anchor), labels)
+        out = model(frames, mask)
+        sequence_loss = digit_loss(out["logits"], labels)
+        if model.reader == "fused":
+            loss = sequence_loss
+            if "anchor" in batch:
+                anchor = batch["anchor"].to(device, non_blocking=True)
+                loss = loss + anchor_weight * digit_loss(model.read_frames(anchor), labels)
+        else:
+            has_boxes = batch["has_boxes"].to(device, non_blocking=True) if "has_boxes" in batch else None
+            boxes = batch["boxes"].to(device, non_blocking=True) if "boxes" in batch else None
+            loss, _ = two_step_loss(out, labels, boxes, has_boxes, mask, attention_weight, count_weight)
+            if "anchor" in batch:
+                anchor = batch["anchor"].to(device, non_blocking=True)
+                anchor_boxes = batch["anchor_boxes"].to(device, non_blocking=True) if "anchor_boxes" in batch else None
+                anchor_loss, _ = two_step_loss(model.read_frames_full(anchor), labels, anchor_boxes, has_boxes, None,
+                                               attention_weight, count_weight)
+                loss = loss + anchor_weight * anchor_loss
         if not math.isfinite(loss.item()):
             raise RuntimeError(f"loss is {loss.item()}, stopping")
 

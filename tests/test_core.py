@@ -16,7 +16,7 @@ from jersey.data import (
     AUGMENTS, BLANK, denormalize, IMAGE_SIZE, MAX_FRAMES, JerseyDataset, decode_label, encode_label, find_images,
     filter_numbers, held_out_partners, linked_groups, make_sampler,
 )
-from jersey.engine import digit_loss, evaluate, train_one_epoch
+from jersey.engine import box_cells, digit_loss, evaluate, train_one_epoch, two_step_loss
 from jersey.explain import (
     attention_check, frame_removal, frame_weights, map_similarity, occlusion_map, query_maps,
     temporal_attention, temporal_pass,
@@ -26,7 +26,10 @@ from jersey.metrics import (
     band_accuracy, confusions, count_flips, heldout_error_share, macro, majority_baseline,
     per_number, scores, shot_bands, wilson_interval,
 )
-from jersey.model import BACKBONE_STRIDE, CELL_STRIDE, VARIANTS, JerseyModel, predict_digits, side_bias
+from jersey.model import (
+    BACKBONE_STRIDE, CELL_STRIDE, LOCAL_BLOCKS, READERS, VARIANTS, JerseyModel, compose, load_run, predict_digits,
+    side_bias,
+)
 from jersey.pairs import FEATHER, MIN_KEPT, StripBank, splice
 from make_pairs import MIN_PROB, ink_box, keep, main as pairs_main
 from make_splits import SPLITS, flagged_players, make_splits
@@ -295,9 +298,10 @@ def fake_batch(real_frames=(3, 1), max_frames=4):
     return frames, mask
 
 
+@pytest.mark.parametrize("reader", READERS)
 @pytest.mark.parametrize("variant", VARIANTS)
-def test_model_output_shapes(variant):
-    model = JerseyModel(variant, max_frames=4, pretrained=False)
+def test_model_output_shapes(variant, reader):
+    model = JerseyModel(variant, max_frames=4, pretrained=False, reader=reader)
     frames, mask = fake_batch()
 
     output = model(frames, mask)
@@ -306,11 +310,12 @@ def test_model_output_shapes(variant):
     assert output["frame_logits"].shape == (2, 4, 2, 11)
 
 
+@pytest.mark.parametrize("reader", READERS)
 @pytest.mark.parametrize("variant", VARIANTS)
-def test_padded_frames_do_not_change_output(variant):
+def test_padded_frames_do_not_change_output(variant, reader):
     # Same 3 real frames, once padded to 4 with noise and once without padding:
     # a missing mask in the mean, pooling or transformer would make these differ.
-    model = JerseyModel(variant, max_frames=4, pretrained=False).eval()
+    model = JerseyModel(variant, max_frames=4, pretrained=False, reader=reader).eval()
     frames, mask = fake_batch(real_frames=(3,))
     frames[~mask] = torch.randn_like(frames[~mask])
 
@@ -321,9 +326,10 @@ def test_padded_frames_do_not_change_output(variant):
     assert torch.allclose(padded, unpadded, atol=1e-5)
 
 
+@pytest.mark.parametrize("reader", READERS)
 @pytest.mark.parametrize("variant", VARIANTS)
-def test_single_real_frame_gives_finite_logits(variant):
-    model = JerseyModel(variant, max_frames=4, pretrained=False)
+def test_single_real_frame_gives_finite_logits(variant, reader):
+    model = JerseyModel(variant, max_frames=4, pretrained=False, reader=reader)
     frames, mask = fake_batch(real_frames=(1,))
 
     logits = model(frames, mask)["logits"]
@@ -331,8 +337,9 @@ def test_single_real_frame_gives_finite_logits(variant):
     assert logits[:, :, :BLANK].isfinite().all()
 
 
-def test_first_digit_is_never_blank():
-    model = JerseyModel("averaged", max_frames=4, pretrained=False)
+@pytest.mark.parametrize("reader", READERS)
+def test_first_digit_is_never_blank(reader):
+    model = JerseyModel("averaged", max_frames=4, pretrained=False, reader=reader)
     frames, mask = fake_batch()
 
     logits = model(frames, mask)["logits"]
@@ -413,9 +420,10 @@ def test_filter_numbers_drops_held_out(exclude, expected):
     assert filter_numbers(["8/a/0", "89/c/0", "9/b/0"], exclude) == expected
 
 
+@pytest.mark.parametrize("reader", READERS)
 @pytest.mark.parametrize("variant", VARIANTS)
-def test_frame_weights_cover_only_real_frames(variant):
-    model = JerseyModel(variant, max_frames=4, pretrained=False)
+def test_frame_weights_cover_only_real_frames(variant, reader):
+    model = JerseyModel(variant, max_frames=4, pretrained=False, reader=reader)
     frames, mask = fake_batch()
 
     weights = model(frames, mask)["frame_weights"]
@@ -852,8 +860,9 @@ def test_frame_weights_sum_to_one(variant):
     assert torch.allclose(weights.sum(dim=0), torch.ones(2), atol=1e-5)
 
 
-def test_temporal_pass_rebuilds_the_encoder_exactly():
-    model = JerseyModel("full", max_frames=4, pretrained=False).eval()
+@pytest.mark.parametrize("reader, queries", [("fused", 2), ("two-step", 3)])
+def test_temporal_pass_rebuilds_the_encoder_exactly(reader, queries):
+    model = JerseyModel("full", max_frames=4, pretrained=False, reader=reader).eval()
     frames, mask = one_sequence()
 
     with torch.no_grad():
@@ -861,9 +870,10 @@ def test_temporal_pass_rebuilds_the_encoder_exactly():
         rebuilt, attention = temporal_pass(model, tokens)
         expected = model.temporal(tokens, mask[mask][None])
 
+    assert tokens.shape[2] == queries
     assert torch.allclose(rebuilt, expected, atol=1e-5)
-    assert attention.shape == (2, 3, 3)
-    assert torch.allclose(attention.sum(dim=-1), torch.ones(2, 3), atol=1e-5)
+    assert attention.shape == (queries, 3, 3)
+    assert torch.allclose(attention.sum(dim=-1), torch.ones(queries, 3), atol=1e-5)
 
 
 def test_temporal_attention_only_for_full():
@@ -1191,3 +1201,143 @@ def test_train_locator_leaves_out_held_out_partners_and_saves_a_run(tiny_runs, t
         locator_main(["--epochs", "1", "--no-pretrained", "--workers", "0", "--device", "cpu",
                       "--data", str(root / "data"), "--splits", str(root / "splits.json"),
                       "--out", str(tmp_path / "locator"), "--run-name", "loc"])
+
+
+# --- Two-step reader --------------------------------------------------------------------------
+
+def test_compose_gives_probabilities_that_sum_to_one_per_position():
+    torch.manual_seed(0)
+    digit_logits, count_logits = torch.randn(5, 7, 3, 10) * 3, torch.randn(5, 7, 2) * 3
+
+    log_probs = compose(digit_logits, count_logits)
+
+    assert log_probs.shape == (5, 7, 2, 11)
+    assert torch.allclose(log_probs.exp().sum(dim=-1), torch.ones(5, 7, 2), atol=1e-5)
+    assert (log_probs[..., 0, BLANK] == float("-inf")).all()
+    one = count_logits.softmax(dim=-1)[..., 0]
+    assert torch.allclose(log_probs[..., 1, BLANK].exp(), one, atol=1e-6)  # second BLANK is P(one digit)
+
+
+def test_compose_reads_a_sure_two_digit_count_as_left_then_right():
+    digit_logits = torch.full((1, 3, 10), -20.0)
+    digit_logits[0, 0, 8] = digit_logits[0, 1, 4] = digit_logits[0, 2, 9] = 20.0  # single 8, left 4, right 9
+
+    assert predict_digits(compose(digit_logits, torch.tensor([[-20.0, 20.0]])))[0].tolist() == [[4, 9]]
+    assert predict_digits(compose(digit_logits, torch.tensor([[20.0, -20.0]])))[0].tolist() == [[8, BLANK]]
+
+
+@pytest.mark.parametrize("reader", READERS)
+def test_load_run_rebuilds_either_reader(tmp_path, reader):
+    model = JerseyModel("averaged", max_frames=4, pretrained=False, reader=reader).eval()
+    config = {"variant": "averaged", "max_frames": 4}
+    if reader != "fused":  # older runs have no reader key: they are fused
+        config["reader"] = reader
+    torch.save({"model": model.state_dict(), "epoch": 3, "config": config}, tmp_path / "best.pt")
+
+    loaded, _, epoch = load_run(tmp_path)
+    frames, mask = fake_batch()
+
+    assert loaded.reader == reader and epoch == 3
+    with torch.no_grad():
+        assert torch.equal(model(frames, mask)["logits"], loaded(frames, mask)["logits"])
+
+
+def test_two_step_values_get_no_deep_features():
+    model = JerseyModel("averaged", pretrained=False, reader="two-step").eval()
+    images = torch.randn(2, 3, *IMAGE_SIZE)
+    seen = []
+    hook = model.digits.attention.register_forward_pre_hook(lambda module, args: seen.append(args[2].clone()))
+
+    with torch.no_grad():
+        first = model.read(images)
+        for parameter in model.backbone[LOCAL_BLOCKS:].parameters():  # change only the deep path
+            parameter.add_(torch.randn_like(parameter))
+        second = model.read(images)
+    hook.remove()
+
+    assert torch.equal(seen[0], seen[1])  # the values are the same
+    assert not torch.allclose(first[1], second[1])  # while the count (deep) did change
+    assert not torch.allclose(first[2], second[2])  # and so did where the queries look
+
+
+def test_two_step_values_are_local():
+    torch.manual_seed(0)
+    model = JerseyModel("averaged", pretrained=False, reader="two-step").eval()
+    images = torch.randn(2, 3, *IMAGE_SIZE)
+    changed = images.clone()
+    changed[..., 72:] = torch.randn_like(changed[..., 72:])  # the far right only
+
+    with torch.no_grad():
+        values = [model.values(model.backbone[:LOCAL_BLOCKS](x)) for x in (images, changed)]
+    moved = (values[0] - values[1]).abs()
+
+    assert moved[..., 9:].mean() > 0
+    assert moved[..., :2].mean() < 0.05 * moved[..., 9:].mean()  # the far left barely moves
+
+
+def test_two_step_keeps_left_and_right_attention_for_explain():
+    model = JerseyModel("averaged", pretrained=False, reader="two-step")
+    frames, mask = fake_batch()
+
+    out = model(frames, mask)
+
+    cells = (IMAGE_SIZE[0] // CELL_STRIDE) * (IMAGE_SIZE[1] // CELL_STRIDE)
+    assert model.digits.last_attention.shape == (int(mask.sum()), 2, cells)
+    assert model.digits.all_attention.shape == (int(mask.sum()), 3, cells)
+    assert torch.equal(model.digits.all_attention[:, 1:], model.digits.last_attention)
+    assert out["attention"].shape == (2, 4, 3, cells) and out["attention"][~mask].eq(0).all()
+    assert torch.allclose(out["attention"][mask].sum(dim=-1), torch.ones(int(mask.sum()), 3), atol=1e-5)
+
+
+def test_three_query_side_bias_starts_single_centre_left_left_and_right_right():
+    bias = JerseyModel("averaged", pretrained=False, reader="two-step").digits.side_bias
+    columns = IMAGE_SIZE[1] // CELL_STRIDE
+    per_column = bias.reshape(3, -1, columns)[:, 0]  # (3, columns)
+    peaks = per_column.argmax(dim=1).tolist()
+
+    assert peaks[1] < peaks[0] < peaks[2]
+    assert peaks[0] in (columns // 2 - 1, columns // 2)
+
+
+def test_box_cells_include_a_thin_box_between_cell_centres():
+    inside = box_cells(torch.tensor([[9.0, 20.0, 14.0, 40.0]]), grid=(6, 4)).reshape(6, 4)
+
+    assert inside[2:5, 1].all() and inside.sum() == 3  # x 9-14 is cell column 1; y 20-40 rows 2-4
+
+
+def test_two_step_loss_rewards_attention_inside_the_boxes():
+    model = JerseyModel("averaged", max_frames=2, pretrained=False, reader="two-step")
+    frames, mask = fake_batch(real_frames=(2, 1), max_frames=2)
+    labels = torch.tensor([[4, 9], [8, BLANK]])
+    boxes = torch.zeros(2, 2, 2, 4)
+    boxes[0, :, 0] = torch.tensor([20.0, 40, 40, 70])
+    boxes[0, :, 1] = torch.tensor([50.0, 40, 70, 70])
+    has_boxes = torch.tensor([True, False])
+    out = model(frames, mask)
+
+    total, parts = two_step_loss(out, labels, boxes, has_boxes, mask)
+    without, _ = two_step_loss(out, labels, boxes, has_boxes, mask, attention_weight=0)
+    on_box = dict(out, attention=torch.where(box_cells(boxes)[:, :, [0, 0, 1]], 1.0, 0.0) / 12)
+
+    assert total.isfinite() and parts["attention"] > 0 and total > without
+    assert two_step_loss(on_box, labels, boxes, has_boxes, mask)[1]["attention"] < parts["attention"]
+    total.backward()  # reaches the weights
+
+
+def test_two_step_training_overfits_one_batch():
+    torch.manual_seed(0)
+    model = JerseyModel("averaged", max_frames=2, pretrained=False, reader="two-step")
+    frames, mask = fake_batch(real_frames=(2, 1, 2, 1), max_frames=2)
+    labels = torch.tensor([[4, 9], [8, BLANK], [6, 6], [9, BLANK]])
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+    for _ in range(60):
+        loss, _ = two_step_loss(model(frames, mask), labels, frame_mask=mask)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    # In train mode: without pretrained weights BatchNorm's running statistics come from
+    # random frames, as in test_training_overfits_one_batch.
+    with torch.no_grad():
+        assert torch.equal(predict_digits(model(frames, mask)["logits"])[0], labels)

@@ -47,6 +47,7 @@ from jersey.metrics import (
     band_accuracy, confusions, majority_baseline, per_number, scores, shot_bands,
 )
 from jersey.model import VARIANTS, JerseyModel
+from jersey.pairs import StripBank
 
 # 7.5% of the steps warm up, as in PARSeq.
 WARMUP_SHARE = 0.075
@@ -79,6 +80,10 @@ def parse_args(argv=None):
                         help="numbers to hold out, e.g. 89; train sequences in their linked groups go too")
     parser.add_argument("--issues", type=Path, default=Path("results/data_issues.json"),
                         help="check_data.py's output, read only with --exclude")
+    parser.add_argument("--synthetic-pairs", type=float, default=0.0,
+                        help="share of single-digit training samples spliced into two-digit ones (jersey/pairs.py)")
+    parser.add_argument("--pairs", type=Path, default=Path("results/pairs/strips.json"),
+                        help="make_pairs.py's output, read only with --synthetic-pairs")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
@@ -132,6 +137,24 @@ def plot_curves(history, best_epoch, path):
     plt.close(figure)
 
 
+def load_pairs(args, exclude, train_ids):
+    """The StripBank for splicing, after checking it cannot leak held-out or non-train data.
+
+    Raises:
+        ValueError: the bank may splice a held-out number, or holds sequences outside train.
+    """
+    bank = StripBank(args.pairs)
+    missing = set(exclude) - set(bank.exclude)
+    if missing:
+        raise ValueError(f"{args.pairs} was made without holding out {sorted(missing)}, so it could splice them")
+    outside = set(bank.sequence_ids()) - set(train_ids)
+    if outside:
+        raise ValueError(f"{args.pairs} has {len(outside)} sequences outside this run's train split, e.g. {min(outside)}")
+    print(f"splicing {args.synthetic_pairs:.0%} of single-digit samples, {len(bank.sequence_ids())} sequences "
+          f"located by {bank.run}")
+    return bank
+
+
 def make_loader(dataset, args, device, sampler=None):
     return DataLoader(
         dataset,
@@ -161,12 +184,16 @@ def main(argv=None):
         print(f"dropped {len(linked)} train sequences linked to held-out numbers: {sorted(linked)}")
     picked = torch.randperm(len(train_ids), generator=torch.Generator().manual_seed(args.seed))
     check_ids = sorted(train_ids[i] for i in picked[:args.train_check_size].tolist())
+    pairs = load_pairs(args, exclude, train_ids) if args.synthetic_pairs > 0 else None
 
     def dataset(ids, **options):
         return JerseyDataset(args.data, ids, max_frames=args.max_frames, **options)
 
-    train_loader = make_loader(dataset(train_ids, augment=True, load_anchor=True, policy=args.augment),
-                               args, device, sampler=make_sampler(train_ids, args.sampler_power))
+    train_loader = make_loader(
+        dataset(train_ids, augment=True, load_anchor=True, policy=args.augment,
+                pairs=pairs, pair_share=args.synthetic_pairs),
+        args, device, sampler=make_sampler(train_ids, args.sampler_power),
+    )
     check_loader = make_loader(dataset(check_ids), args, device)
     val_loader = make_loader(dataset(val_ids), args, device)
 

@@ -1,0 +1,60 @@
+{
+  "per_digit": {
+    "4": {
+      "sequences": 714,
+      "usable sequences": 462,
+      "frames": 5067,
+      "frames kept": 1963,
+      "anchors": 714,
+      "anchors kept": 278,
+      "frames kept share": 0.387
+    },
+    "6": {
+      "sequences": 618,
+      "usable sequences": 428,
+      "frames": 4373,
+      "frames kept": 2074,
+      "anchors": 618,
+      "anchors kept": 300,
+      "frames kept share": 0.474
+    },
+    "8": {
+      "sequences": 1436,
+      "usable sequences": 989,
+      "frames": 10867,
+      "frames kept": 4523,
+      "anchors": 1436,
+      "anchors kept": 483,
+      "frames kept share": 0.416
+    },
+    "9": {
+      "sequences": 1070,
+      "usable sequences": 828,
+      "frames": 8142,
+      "frames kept": 4642,
+      "anchors": 1070,
+      "anchors kept": 520,
+      "frames kept share": 0.57
+    }
+  },
+  "numbers": [
+    "44",
+    "46",
+    "48",
+    "64",
+    "66",
+    "68",
+    "69",
+    "84",
+    "86",
+    "88",
+    "89",
+    "94",
+    "96",
+    "98",
+    "99"
+  ],
+  "never made (held out)": [
+    "49"
+  ]
+}

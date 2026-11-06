@@ -1,6 +1,6 @@
 """Core tests on small fake data. Run from the project root: uv run pytest"""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 import csv
 import json
@@ -25,7 +25,9 @@ from jersey.metrics import (
     band_accuracy, confusions, count_flips, heldout_error_share, macro, majority_baseline,
     per_number, scores, shot_bands, wilson_interval,
 )
-from jersey.model import VARIANTS, JerseyModel, predict_digits
+from jersey.model import BACKBONE_STRIDE, CELL_STRIDE, VARIANTS, JerseyModel, predict_digits, side_bias
+from jersey.pairs import FEATHER, MIN_KEPT, StripBank, splice
+from make_pairs import main as pairs_main
 from make_splits import SPLITS, flagged_players, make_splits
 from evaluate import main as evaluate_main, prefix_answers, score, vote
 from train import main as train_main
@@ -336,6 +338,18 @@ def test_first_digit_is_never_blank():
     assert (logits[:, 0, BLANK] == float("-inf")).all()
 
 
+def test_side_bias_starts_first_query_left_and_second_right():
+    rows, columns = 3, 12
+    bias = side_bias(rows, columns).reshape(2, rows, columns)
+    middle = (columns - 1) / 2
+
+    assert (bias <= 0).all()
+    assert torch.equal(bias[:, 0], bias[:, -1])  # the same for every row
+    first, second = bias[:, 0].argmax(dim=-1).tolist()
+    assert first < middle < second
+    assert torch.allclose(bias[0, 0], bias[1, 0].flip(0))  # mirror images
+
+
 def test_read_frames_shape():
     model = JerseyModel("averaged", pretrained=False)
 
@@ -373,7 +387,7 @@ def test_attention_maps_are_kept():
 
     model(frames, mask)
 
-    cells = (IMAGE_SIZE[0] // 16) * (IMAGE_SIZE[1] // 16)
+    cells = (IMAGE_SIZE[0] // CELL_STRIDE) * (IMAGE_SIZE[1] // CELL_STRIDE)
     assert model.digits.last_attention.shape == (int(mask.sum()), 2, cells)
 
 
@@ -432,8 +446,8 @@ def test_predict_digits_never_gives_blank_first():
     assert (digits[:, 0] != BLANK).all()
 
 
-def test_image_size_not_divisible_by_16_raises():
-    with pytest.raises(ValueError, match="divisible by 16"):
+def test_image_size_not_divisible_by_stride_raises():
+    with pytest.raises(ValueError, match=f"divisible by {BACKBONE_STRIDE}"):
         JerseyModel("averaged", image_size=(200, 100), pretrained=False)
 
 
@@ -799,7 +813,7 @@ def one_sequence(real_frames=3, max_frames=4):
     return frames[0], mask[0]
 
 
-GRID = (IMAGE_SIZE[0] // 16, IMAGE_SIZE[1] // 16)
+GRID = (IMAGE_SIZE[0] // CELL_STRIDE, IMAGE_SIZE[1] // CELL_STRIDE)
 
 
 def test_query_maps_sum_to_one_per_frame_and_digit():
@@ -926,3 +940,113 @@ def test_check_shortcuts_writes_scores_and_picture(tiny_runs):
     assert report["sequences"] == 1  # val without the held-out 49
     assert set(report["model"]) == set(PERTURBATIONS)
     assert (tiny_runs / "holdout" / "shortcuts_val.png").exists()
+
+
+def test_splice_puts_the_two_strips_side_by_side_without_a_hard_seam():
+    a = torch.zeros(3, *IMAGE_SIZE, dtype=torch.uint8)
+    b = torch.full((3, *IMAGE_SIZE), 200, dtype=torch.uint8)
+    centre = (48, 96)
+
+    first = splice(a, centre, b, centre, a_left=True)
+    second = splice(a, centre, b, centre, a_left=False)
+
+    assert first.shape == a.shape and first.dtype == torch.uint8
+    assert first[:, 96, 40].tolist() == [0] * 3 and first[:, 96, 56].tolist() == [200] * 3
+    assert second[:, 96, 40].tolist() == [200] * 3 and second[:, 96, 56].tolist() == [0] * 3
+    assert first[:, :60].eq(0).all() and first[:, :, :20].eq(0).all()  # outside the patch: A as it was
+    steps = first[0, 96].int().diff().abs()
+    assert steps.max() <= 200 / (FEATHER + 1) + 1  # A fades into B, and B into the frame
+
+
+def fake_strips(path, kept_frames, exclude=()):
+    """Write a make_pairs.py output: each sequence gets kept_frames[sequence] kept frames and a kept anchor."""
+    sequences = {
+        sequence_id: [
+            {"image": f"{sequence_id}/1_{frame}_0.png", "anchor": False, "kept": frame <= kept,
+             "centre": [48, 90], "base": 0.9, "drop": 0.5, "colour": [0.5, 0.5, 0.5]}
+            for frame in range(1, 4)
+        ] + [{"image": f"{sequence_id}/1_0_0_anchor.jpg", "anchor": True, "kept": True,
+              "centre": [48, 90], "base": 0.9, "drop": 0.5, "colour": [0.5, 0.5, 0.5]}]
+        for sequence_id, kept in kept_frames.items()
+    }
+    path.write_text(json.dumps({"run": "fake", "exclude": list(exclude), "sequences": sequences}))
+    return path
+
+
+def test_partner_never_makes_a_held_out_number_or_pairs_a_player_with_themself(tmp_path):
+    kept = {"4/a/0": 3, "4/a/1": 3, "4/b/0": 3, "9/c/0": 3, "9/d/0": 3, "8/e/0": MIN_KEPT - 1}
+    bank = StripBank(fake_strips(tmp_path / "strips.json", kept, exclude=("49",)))
+    torch.manual_seed(0)
+
+    made = Counter()
+    for sequence_id in bank.sequence_ids():
+        for _ in range(50):
+            partner_id, a_left = bank.partner(sequence_id)
+            assert partner_id.split("/")[1] != sequence_id.split("/")[1]
+            digit, other = sequence_id.split("/")[0], partner_id.split("/")[0]
+            made[digit + other if a_left else other + digit] += 1
+
+    assert "8/e/0" not in bank  # too few frames with a found digit
+    assert "49" not in made and {"44", "94", "99"} <= set(made)
+
+
+def test_dataset_splices_only_when_augmenting(tmp_path):
+    kept = {"4/a/0": 3, "9/c/0": 3}
+    for sequence_id in kept:
+        fake_sequence_dir(tmp_path / "data", sequence_id, [1, 2, 3], noise=True)
+    bank = StripBank(fake_strips(tmp_path / "strips.json", kept, exclude=("49",)))
+    torch.manual_seed(0)
+
+    def items(augment):
+        dataset = JerseyDataset(tmp_path / "data", list(kept), augment=augment, load_anchor=True,
+                                max_frames=4, pairs=bank, pair_share=1.0)
+        return [dataset[i] for i in range(len(dataset)) for _ in range(5)]
+
+    spliced, plain = items(augment=True), items(augment=False)
+
+    assert {decode_label(*item["label"].tolist()) for item in spliced} == {"94"}
+    assert all(item["mask"].sum() == 3 and item["frames"].shape == (4, 3, *IMAGE_SIZE) for item in spliced)
+    assert all(item["anchor"].shape == (3, *IMAGE_SIZE) for item in spliced)
+    assert {decode_label(*item["label"].tolist()) for item in plain} == {"4", "9"}
+
+
+def test_make_pairs_writes_bank_summary_and_pictures(tiny_runs, tmp_path):
+    out = tmp_path / "pairs"
+    # An untrained run reads nothing, so keep every box to get a bank to splice from.
+    pairs_main(["smoke", "--runs", str(tiny_runs), "--out", str(out), "--device", "cpu", "--workers", "0",
+                "--min-read", "0", "--min-drop", "-1"])
+
+    strips = json.loads((out / "strips.json").read_text())
+    assert set(strips["sequences"]) == {"4/a/0", "4/f/0"}  # the single-digit train sequences
+    assert all(image["kept"] for images in strips["sequences"].values() for image in images)
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["numbers"] == ["44"]
+    assert (out / "strips.png").exists() and (out / "spliced.png").exists()
+
+
+def test_train_refuses_a_bank_that_could_splice_a_held_out_number(tiny_runs, tmp_path):
+    bank = fake_strips(tmp_path / "strips.json", {"4/a/0": 3}, exclude=())
+    root = tiny_runs.parent
+
+    with pytest.raises(ValueError, match="without holding out"):
+        train_main([
+            "--epochs", "1", "--no-pretrained", "--workers", "0", "--device", "cpu", "--max-frames", "4",
+            "--data", str(root / "data"), "--splits", str(root / "splits.json"),
+            "--issues", str(root / "data_issues.json"), "--out", str(tmp_path / "runs"),
+            "--exclude", "49", "--synthetic-pairs", "0.5", "--pairs", str(bank),
+        ])
+
+
+def test_train_with_spliced_pairs(tiny_runs, tmp_path):
+    bank = fake_strips(tmp_path / "strips.json", {"4/a/0": 3, "4/f/0": 3})
+    root = tiny_runs.parent
+
+    train_main([
+        "--variant", "averaged", "--epochs", "1", "--batch-size", "2", "--max-frames", "4",
+        "--train-check-size", "2", "--no-pretrained", "--workers", "0", "--device", "cpu",
+        "--data", str(root / "data"), "--splits", str(root / "splits.json"), "--out", str(tmp_path / "runs"),
+        "--run-name", "pairs", "--synthetic-pairs", "1", "--pairs", str(bank),
+    ])
+
+    config = json.loads((tmp_path / "runs" / "pairs" / "config.json").read_text())
+    assert config["synthetic_pairs"] == 1.0

@@ -42,6 +42,19 @@ is dominated by one-digit numbers. Its per-number val scores, with 95% intervals
 `--augment basic` is the earlier, colour-keeping policy, for comparison. Use `--schedule onecycle` for final runs and
 `--max-frames 1 --variant averaged` for the single-frame baseline.
 
+Two-digit numbers are rare in this data (a first 4 only in 48), so a model cannot learn to read an
+unseen one such as 49 digit by digit. `--synthetic-pairs` splices extra two-digit training sequences from
+single-digit ones, with no annotation (see `jersey/pairs.py`):
+
+```bash
+uv run make_pairs.py full_strong_ex49_keypos   # finds each single digit with that run, writes results/pairs/
+uv run train.py --exclude 49 --synthetic-pairs 0.3 --schedule onecycle --epochs 40
+```
+
+`make_pairs.py` locates the digit by covering the torso and keeps the boxes the run's reading depends on.
+Check `results/pairs/strips.png` (the boxes) and `spliced.png` (spliced frames) before training. Training stops
+if the bank could splice a held-out number, so build it with a run that held out the same numbers.
+
 `results/splits.json` is committed, so you only need to rerun the two scripts if the data changes.
 
 ## Results

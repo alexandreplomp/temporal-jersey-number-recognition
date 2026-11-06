@@ -16,7 +16,7 @@ an untrained model (Adebayo et al. 2018): maps that look alike for both show the
 not the model. Frame removal is small when other frames can compensate, so read it next
 to the frame weights, not alone.
 
-Maps use the model's grid of 16 x 16 pixel cells (12 x 6 for a 192 x 96 crop), so
+Maps use the model's grid of CELL_STRIDE-pixel cells (24 x 12 for a 192 x 96 crop), so
 attention and occlusion compare cell for cell. Occlusion covers a cell in one frame and
 reads that frame alone, since in a sequence the other frames would hide the effect.
 Functions take one sequence, frames (T, 3, H, W) and mask (T,), use its R real frames,
@@ -31,9 +31,9 @@ from matplotlib.figure import Figure
 import torch
 
 from jersey.data import BLANK, decode_label, denormalize
-from jersey.model import BACKBONE_STRIDE, JerseyModel, predict_digits
+from jersey.model import CELL_STRIDE, JerseyModel, predict_digits
 
-CELL = BACKBONE_STRIDE  # pixels per side of one grid cell
+CELL = CELL_STRIDE  # pixels per side of one grid cell
 QUERY_COLOURS = ((1.0, 0.15, 0.1), (0.1, 0.45, 1.0))  # digit 1 red, digit 2 blue
 
 

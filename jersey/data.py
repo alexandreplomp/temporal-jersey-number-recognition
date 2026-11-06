@@ -18,6 +18,8 @@ import torch
 from torch.utils.data import Dataset, WeightedRandomSampler
 from torchvision.transforms import v2
 
+from jersey.pairs import splice
+
 IMAGE_SUFFIXES = {".jpg", ".png"}
 # Height, width. Crops are about 87 x 38 pixels (median), about 2.3:1, so 2:1 stretches
 # the width by about 14%. Harmless, since training and evaluation resize the same way.
@@ -221,6 +223,8 @@ class JerseyDataset(Dataset):
     augment picks frames at random and augments them with the policy from AUGMENTS, for training.
     load_anchor adds the anchor, for training and the anchor-only baseline.
     Both off gives the repeatable input used for evaluation.
+    pairs (a jersey.pairs.StripBank) with augment turns a share pair_share of the single-digit
+    sequences into two-digit ones, spliced with a kit-near partner before augmentation.
 
     Each item is a dict with:
         frames      (max_frames, 3, H, W), zero-padded
@@ -242,27 +246,37 @@ class JerseyDataset(Dataset):
         max_frames: int = MAX_FRAMES,
         image_size: tuple[int, int] = IMAGE_SIZE,
         policy: str = "strong",
+        pairs=None,
+        pair_share: float = 0.0,
     ):
-        data_dir = Path(data_dir)
+        self.data_dir = Path(data_dir)
         self.sequence_ids = list(sequence_ids)
-        self.samples = [_index_sequence(data_dir, sequence_id) for sequence_id in self.sequence_ids]
+        self.samples = [_index_sequence(self.data_dir, sequence_id) for sequence_id in self.sequence_ids]
         self.augment = augment
         self.transform = AUGMENTS[policy]
         self.load_anchor = load_anchor
         self.max_frames = max_frames
         self.resize = v2.Resize(image_size, antialias=True)
+        self.pairs = pairs
+        self.pair_share = pair_share
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
-        anchor_path, frame_paths, label = self.samples[index]
-        picked = _pick_frames(len(frame_paths), self.max_frames, at_random=self.augment)
-        paths = [frame_paths[i] for i in picked]
-        if self.load_anchor:
-            paths.append(anchor_path)
+        spliced = None
+        if self.augment and self.pairs is not None and torch.rand(()).item() < self.pair_share:
+            spliced = self._splice(self.sequence_ids[index])
+        if spliced is None:
+            anchor_path, frame_paths, label = self.samples[index]
+            picked = _pick_frames(len(frame_paths), self.max_frames, at_random=self.augment)
+            paths = [frame_paths[i] for i in picked]
+            if self.load_anchor:
+                paths.append(anchor_path)
+            images = torch.stack([_load_image(path, self.resize) for path in paths])
+        else:
+            images, label = spliced
 
-        images = torch.stack([_load_image(path, self.resize) for path in paths])
         if self.augment:
             # One call on the whole stack, so every frame and the anchor get the same augmentation.
             images = self.transform(images)
@@ -280,6 +294,40 @@ class JerseyDataset(Dataset):
         if self.load_anchor:
             item["anchor"] = anchor
         return item
+
+    def _splice(self, sequence_id):
+        """Stacked uint8 images (frames, then anchor) and label of a spliced two-digit version.
+
+        None when the sequence has two digits, too few found digits, or no allowed partner.
+        """
+        if len(sequence_id.split("/")[0]) != 1 or sequence_id not in self.pairs:
+            return None
+        found = self.pairs.partner(sequence_id)
+        if found is None:
+            return None
+        partner_id, a_left = found
+        own, other = self.pairs.frames[sequence_id], self.pairs.frames[partner_id]
+        picked = _pick_frames(len(own), self.max_frames, at_random=True)
+        # The partner's frames in time order too, repeated if it has fewer.
+        if len(other) >= len(picked):
+            matched = _pick_frames(len(other), len(picked), at_random=True)
+        else:
+            matched = torch.arange(len(picked)) % len(other)
+        pairs = [(own[i], other[j]) for i, j in zip(picked.tolist(), matched.tolist())]
+        if self.load_anchor:
+            anchors = (self.pairs.anchors[sequence_id], self.pairs.anchors[partner_id])
+            # Without a found digit in both anchors, the first spliced frame stands in.
+            pairs.append(anchors if None not in anchors else pairs[0])
+        images = torch.stack([
+            splice(self._load(a_name), a_centre, self._load(b_name), b_centre, a_left)
+            for (a_name, a_centre), (b_name, b_centre) in pairs
+        ])
+        digit, partner_digit = int(sequence_id.split("/")[0]), int(partner_id.split("/")[0])
+        label = (digit, partner_digit) if a_left else (partner_digit, digit)
+        return images, label
+
+    def _load(self, name):
+        return _load_image(self.data_dir / name, self.resize)
 
 
 def _index_sequence(data_dir, sequence_id):

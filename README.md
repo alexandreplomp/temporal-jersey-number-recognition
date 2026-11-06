@@ -1,68 +1,82 @@
 # Temporal jersey number recognition
 
-Recognise two-digit jersey numbers from sequences of player crops.
+A lightweight model that reads a jersey number from a sequence of player crops and gives one stable
+answer per sequence. It reads every number as two positions, each a digit or blank, with one shared
+digit classifier. So a number never seen in training, such as 94 after 4, 9 and 49, can still be read.
+The design, the results and their limits are in [REPORT.md](REPORT.md).
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.12 and the locked dependencies:
+Requires [uv](https://docs.astral.sh/uv/); it installs Python 3.12 and the locked dependencies:
 
 ```bash
 uv sync
 ```
 
-Unzip the dataset into `data/` so the layout is `data/<number>/<player>/<sequence>/<image>.jpg`.
-Each sequence has one `*_anchor` image plus its frames. `data/` is never changed and is not in Git.
+Unzip the dataset into `data/`, so the layout is `data/<number>/<player>/<sequence>/<frames>.jpg`. Each
+sequence may have one `*_anchor` image, used only in training. `data/` is never changed and is not in Git.
 
-## Commands
-
-```bash
-uv run check_data.py    # writes results/data_issues.json and prints counts per number
-uv run make_splits.py   # writes results/splits.json (player-level, leakage-free)
-uv run pytest           # runs the tests on small fake data
-uv run train.py --variant full   # trains one model, writes results/runs/<variant>_<date-time>/
-```
+## Read a number
 
 ```bash
-uv run evaluate.py averaged_final full_final   # scores runs on val, writes results/results_val.csv
-uv run explain.py results/runs/full_final      # prediction.png for an existing run
-uv run check_shortcuts.py averaged_final      # val accuracy without colour or without the number area
+uv run predict.py data/4/<player>/<sequence>                       # the shipped model in weights/final/
+uv run predict.py <folder> --two-digit-share 0.5                    # a league with more two-digit numbers
 ```
 
-`evaluate.py` scores three methods per run the same way: the sequence model, the anchor alone, and a
-confidence-weighted vote of the frames read alone. Use `--split test` only once, on the final runs;
-a second test evaluation of a run stops.
+It prints one number and its confidence. The anchor is ignored, since a tracker has none.
 
-With `--exclude`, held-out numbers are scored apart: on val, their train and val sequences
-(`predictions_holdout_val.csv`); on `--split test`, only their test sequences (`predictions_holdout_test.csv`),
-since the others were already seen while developing.
+## Pipeline
 
-`uv run train.py --help` lists the settings. The best epoch is always the one with the lowest val loss
-(saved as `selected_by` in `config.json`), and val two-digit accuracy is reported beside it, since the loss
-is dominated by one-digit numbers. Its per-number val scores, with 95% intervals, go to `per_number.json` in the run folder. `--augment strong` (the default) scrambles colour, since colour predicts the number in this data (see `check_shortcuts.py`);
-`--augment basic` is the earlier, colour-keeping policy, for comparison. Use `--schedule onecycle` for final runs and
-`--max-frames 1 --variant averaged` for the single-frame baseline.
+Each script is one step; it reads the previous step's files and writes its own.
 
-Two-digit numbers are rare in this data (a first 4 only in 48), so a model cannot learn to read an
-unseen one such as 49 digit by digit. `--synthetic-pairs` splices extra two-digit training sequences from
-single-digit ones, with no annotation (see `jersey/pairs.py`):
+| Step | Command | Writes |
+|---|---|---|
+| Data | `uv run prepare.py` | `results/data_issues.json`, `results/splits.json` (by player, 70/15/15) |
+| Train | `uv run train.py --approach two_step_mean --exclude 49` | `results/runs/two_step_mean_ex49/`, and `results/boxes/ex49/` if missing |
+| Evaluate | `uv run evaluate.py two_step_mean_ex49` (add `--split test` once) | `metrics_val.json` in the run, and `results/compare/` |
+| Predict | `uv run predict.py <folder>` | one number |
 
-```bash
-uv run make_pairs.py full_strong_ex49_keypos   # finds each single digit with that run, writes results/pairs/
-uv run train.py --exclude 49 --synthetic-pairs 0.3 --schedule onecycle --epochs 40
-```
+`reproduce.sh` runs everything in order (about 5-6 h on an M-series Mac):
+1. the tests
+2. the comparison runs with 49 held out
+3. the choice of the final approach on val
+4. the final model on all numbers
+5. the test split, once
+6. copying the weights to `weights/final/`
 
-`make_pairs.py` locates the digit by covering the torso and keeps the boxes the run's reading depends on.
-Check `results/pairs/strips.png` (the boxes) and `spliced.png` (spliced frames) before training. Training stops
-if the bank could splice a held-out number, so build it with a run that held out the same numbers.
+`uv run pytest` runs the tests on small fake data (about 2 minutes).
 
-A pasted patch is itself a cue: if only two-digit samples have one, the model learns "pasted means two
-digits" (two_step_s2_ex49 reads pasted single digits right 45% of the time against 83% unpasted).
-`--synthetic-singles` pastes a partner's digit alone, the same way and as wide, labelled as one digit, and
-the blend width varies per sequence for both kinds. Use the same share for both, e.g.
-`--synthetic-pairs 0.4 --synthetic-singles 0.4`. The pair metric's `pasted_singles_accuracy` checks it.
+The approaches are the table at the top of `train.py`; each row changes one thing:
 
-`results/splits.json` is committed, so you only need to rerun the two scripts if the data changes.
+| Approach | What it shows |
+|---|---|
+| `single_frame` | One frame per sequence: what the temporal component adds |
+| `fused` | Two digit heads on whole-crop features: the two-digit structure alone |
+| `two_step_mean` | Where-then-what reader, frames averaged |
+| `two_step_pool` | The same, with learned frame weights |
+| `two_step_full` | The same, frames see each other (transformer) |
+| `parseq_gate` | PARSeq-Tiny, a pretrained text reader, per frame; a learned gate per digit position over up to 8 frames; real data only |
 
 ## Results
 
-To be added.
+Filled in from `results/compare/table.csv` after `reproduce.sh`.
+
+| Run | Val accuracy | Two-digit | Held-out 49 | Anchor alone | Frame vote | Test accuracy |
+|---|---|---|---|---|---|---|
+| TODO | | | | | | |
+
+## Layout
+
+```text
+prepare.py   train.py   evaluate.py   predict.py   reproduce.sh
+jersey/
+  data.py     labels, splits, the sequence dataset and its augmentation
+  pairs.py    finding digit boxes without annotation, spliced two-digit sequences, the pair metric
+  model.py    readers (fused, two-step, parseq), frame combiners (mean, pool, transformer)
+  parseq.py   the PARSeq-Tiny network (Apache-2.0, from baudm/parseq), cut to the ten digits
+  engine.py   losses, one training epoch, evaluation, shared helpers
+  metrics.py  scores with 95% intervals
+  plots.py    every figure
+tests/  test_parts.py  test_pipeline.py  helpers.py
+weights/final/   the shipped model (after reproduce.sh)
+```

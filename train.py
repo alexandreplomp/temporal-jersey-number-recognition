@@ -1,38 +1,22 @@
-"""Train one model and keep the epoch with the lowest val loss.
-Example: uv run train.py --variant averaged --epochs 2
+"""Train one named approach (APPROACHES below) and keep its best epoch.
+Example: uv run train.py --approach two_step_mean --exclude 49
 
-Writes results/runs/<run-name>/:
-    config.json      every setting, plus device, parameter count and sequence counts
-    splits.json      the split this run was trained with, for evaluate.py
-    train_batch.png  one training batch as the model sees it, anchor in the last column
-    history.json     scores per epoch, and the best epoch. Epoch 0 is before training.
+Reads results/splits.json and results/data_issues.json (prepare.py). An approach that pastes digits
+needs digit boxes for its hold-out setting; if results/boxes/<tag>/ is missing, they are made first
+(jersey/pairs.py: the local digit reader is trained, checked against its gate, and boxes are found).
+Held-out numbers and the train sequences linked to them are left out of everything.
+
+Writes results/runs/<approach>_<tag>/ (tag "ex49" for --exclude 49, "all" without; "_s<seed>" for
+another seed). A two-stage approach writes stage 1 to <run>/stage1/ and starts stage 2 from it:
+    config.json      the approach, its stages, the held-out numbers, the count offset, sizes
+    splits.json      the split it was trained with
+    history.json     per epoch: train loss, train-check and val scores (+ pair metric), and the best
     curves.png       loss, accuracy, two-digit and macro accuracy per epoch
-    best.pt          {"model": state_dict, "epoch", "config"} of the best epoch
-    per_number.json  val scores of the best epoch: per number, per shot band, top confusions
-                     and the always-the-most-common-number baseline
-    prediction.png   one val sequence per number: where each digit is read, what covering
-                     a cell changes, and how much each frame counts (see jersey/explain.py)
-    explain.json     the checks behind prediction.png, per case and averaged
-
-Curves come from a fixed, unaugmented subset of train ("train-check") and from val,
-since the running training loss uses sampled, augmented batches.
-
-The best epoch is the one with the lowest val loss, not the best macro accuracy: 64 and
-88 have 1-2 val sequences each, so macro accuracy jumps by up to 10 points when one of
-them flips, and in practice picked epochs with clearly lower accuracy (see metrics.py).
-This rule is fixed and saved in config.json as selected_by. Val loss is dominated by the
-common one-digit numbers, so val two-digit accuracy is always reported beside it.
-
---reader two-step trains the two-step reader (jersey/model.py) in two stages:
-    stage 1  --no-real-pairs --synthetic-pairs 0.4 --synthetic-singles 0.4: singles, spliced pairs
-             and pasted singles only (so a paste does not mean two digits), the best
-             epoch by the highest pair_accuracy on --val-pairs (jersey/pair_check.py), since
-             val loss has hardly any two-digit numbers to judge reading digit by digit
-    stage 2  --init-from <stage 1 run>: all real data at lower rates, best by val loss
---val-pairs adds the pair metrics to history.json for any run, of either reader.
+    train_batch.png  one training batch as the model sees it, anchor last
+    best.pt          {"model", "epoch", "config"} of the best epoch
 """
 
-from datetime import datetime
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import argparse
 import json
@@ -40,370 +24,198 @@ import math
 import shutil
 import time
 
-import matplotlib
-matplotlib.use("Agg")  # files only, no window
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
 import torch
-from torch.utils.data import DataLoader
-from torchvision.utils import make_grid, save_image
 
-from jersey.data import AUGMENTS, MAX_FRAMES, JerseyDataset, denormalize, filter_numbers, held_out_partners, make_sampler
-from jersey.engine import ANCHOR_WEIGHT, ATTENTION_WEIGHT, COUNT_WEIGHT, evaluate, train_one_epoch
-from jersey.explain import explain_run
-from jersey.metrics import (
-    band_accuracy, confusions, majority_baseline, per_number, scores, shot_bands,
-)
-from jersey.model import READERS, VARIANTS, JerseyModel, count_prior
-from jersey.pair_check import build_pair_set, pair_metrics
-from jersey.pairs import StripBank
+from jersey import plots
+from jersey.data import JerseyDataset, filter_numbers, make_sampler, number_of, read_splits, split_ids
+from jersey.engine import evaluate, make_loader, make_optimizer, pick_device, train_one_epoch
+from jersey.metrics import scores
+from jersey.model import JerseyModel, count_prior
+from jersey.pairs import LOCATOR_EPOCHS, StripBank, build_pair_set, make_boxes, pair_metrics, tag_of
 
-# 7.5% of the steps warm up, as in PARSeq.
-WARMUP_SHARE = 0.075
-# Loss of a uniform guess: 10 classes for the first digit, 11 for the second.
-UNIFORM_LOSS = (math.log(10) + math.log(11)) / 2
-# The history key that picks the best epoch, and whether lowest or highest wins. Not a
-# setting: fixed per kind of run. Without real pairs val loss barely measures two-digit
-# reading, so stage 1 is judged on the spliced val pairs.
-SELECTED_BY = "val_loss"
-SELECTED_BY_NO_REAL_PAIRS = "pair_accuracy"
+UNIFORM_LOSS = (math.log(10) + math.log(11)) / 2  # a uniform guess: 10 classes for position 1, 11 for position 2
+TRAIN_CHECK_SIZE = 500  # a fixed, unaugmented subset of train, for train-vs-val curves
+
+
+@dataclass(frozen=True)
+class Stage:
+    epochs: int
+    lr: float  # new parts
+    backbone_lr: float  # the pretrained backbone, 10:1 as in DETR
+    pair_share: float  # single-digit samples spliced into pairs
+    single_share: float  # single-digit samples given a partner's digit pasted alone
+    real_pairs: bool  # train on real two-digit sequences
+    selected_by: str  # history key that picks the best epoch
+    highest: bool  # whether the highest value wins
+
+
+@dataclass(frozen=True)
+class Approach:
+    reader: str  # jersey.model.READERS
+    temporal: str  # jersey.model.TEMPORAL
+    max_frames: int
+    stages: tuple[Stage, ...]
+
+
+# Stage 1 learns two-digit reading digit by digit from spliced pairs, without real two-digit
+# sequences, and is judged on spliced val pairs, since val has too few two-digit numbers. Stage 2
+# starts from it with all real data at a tenth of the rates; its start counts as a candidate.
+ONE_STAGE = (Stage(30, 3e-4, 3e-5, 0.0, 0.0, True, "val_loss", False),)
+TWO_STAGES = (Stage(40, 3e-4, 3e-5, 0.4, 0.4, False, "pair_accuracy", True),
+              Stage(20, 3e-5, 3e-6, 0.3, 0.3, True, "val_loss", False))
+# A pretrained text reader is fine-tuned gently, on the real (augmented) data only, no pastes.
+PARSEQ_STAGE = (Stage(15, 1e-4, 1e-5, 0.0, 0.0, True, "val_loss", False),)
+
+# Each row changes one thing. The final model is the best two_step_* or parseq_gate run by val macro
+# accuracy (numbers with at least 5 sequences), retrained on all numbers; never chosen on hold-out or test.
+APPROACHES = {
+    "single_frame": Approach("two-step", "mean", 1, TWO_STAGES),  # what the temporal component adds
+    "fused": Approach("fused", "mean", 10, ONE_STAGE),  # the two-digit structure alone, no pastes
+    "two_step_mean": Approach("two-step", "mean", 10, TWO_STAGES),
+    "two_step_pool": Approach("two-step", "pool", 10, TWO_STAGES),
+    "two_step_full": Approach("two-step", "transformer", 10, TWO_STAGES),
+    # PARSeq-Tiny per frame, two position queries, a learned gate per position over up to 8 frames.
+    "parseq_gate": Approach("parseq", "pool", 8, PARSEQ_STAGE),
+}
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--variant", choices=VARIANTS, default="full")
-    parser.add_argument("--reader", choices=READERS, default="fused",
-                        help="fused: the first reader; two-step: deep features choose where, local features what")
-    parser.add_argument("--init-from", help="run folder under --out to start from, e.g. a stage 1 run")
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=32)
-    # 10:1 between the new parts and the pretrained backbone, as in DETR.
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--backbone-lr", type=float, default=3e-5)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--schedule", choices=("constant", "onecycle"), default="constant",
-                        help="constant to debug and compare, onecycle (warmup, then decay) for final runs")
-    parser.add_argument("--anchor-weight", type=float, default=ANCHOR_WEIGHT)
-    parser.add_argument("--max-frames", type=int, default=MAX_FRAMES,
-                        help="1 gives the single-frame baseline")
-    parser.add_argument("--augment", choices=tuple(AUGMENTS), default="strong",
-                        help="basic keeps kit colours, strong scrambles colour and adds blur (see data.py)")
-    parser.add_argument("--sampler-power", type=float, default=0.5,
-                        help="0 keeps the data as it is, 1 balances numbers fully")
-    parser.add_argument("--train-check-size", type=int, default=500)
-    parser.add_argument("--exclude", nargs="*", default=[],
-                        help="numbers to hold out, e.g. 89; train sequences in their linked groups go too")
-    parser.add_argument("--issues", type=Path, default=Path("results/data_issues.json"),
-                        help="check_data.py's output, read only with --exclude")
-    parser.add_argument("--synthetic-pairs", type=float, default=0.0,
-                        help="share of single-digit training samples spliced into two-digit ones (jersey/pairs.py)")
-    parser.add_argument("--pairs", type=Path, default=Path("results/pairs/strips.json"),
-                        help="make_pairs.py --split train output, read only with --synthetic-pairs or -singles")
-    parser.add_argument("--synthetic-singles", type=float, default=0.0,
-                        help="share of single-digit training samples given a partner's digit pasted alone, labelled"
-                             " one digit, so a pasted patch does not mean two digits (jersey/pairs.py)")
-    parser.add_argument("--no-real-pairs", action="store_true",
-                        help="train without real two-digit sequences (stage 1); picks the best epoch by pair_accuracy")
-    parser.add_argument("--val-pairs", type=Path,
-                        help="make_pairs.py --split val output: score spliced val pairs every epoch (jersey/pair_check.py)")
-    parser.add_argument("--attention-weight", type=float, default=ATTENTION_WEIGHT, help="two-step reader only")
-    parser.add_argument("--count-weight", type=float, default=COUNT_WEIGHT, help="two-step reader only")
-    parser.add_argument("--no-count-prior", action="store_true",
-                        help="two-step reader: leave out the count offset from the training numbers (model.count_prior)")
+    parser.add_argument("--approach", choices=tuple(APPROACHES), required=True)
+    parser.add_argument("--exclude", nargs="*", default=[], help="numbers to hold out, e.g. 49")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--epochs", type=int, help="override every stage's epochs, e.g. 1 for a smoke run")
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
-    parser.add_argument("--no-pretrained", action="store_true", help="start from random weights")
     parser.add_argument("--data", type=Path, default=Path("data"))
-    parser.add_argument("--splits", type=Path, default=Path("results/splits.json"))
-    parser.add_argument("--out", type=Path, default=Path("results/runs"))
-    parser.add_argument("--run-name", help="default: <variant>_<date-time>")
+    parser.add_argument("--results", type=Path, default=Path("results"))
+    parser.add_argument("--no-pretrained", action="store_true", help="random start (tests only)")
     return parser.parse_args(argv)
 
 
-def pick_device(name):
-    if name != "auto":
-        return torch.device(name)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def training_ids(splits, exclude, issues_path):
-    """Train ids without held-out numbers and their linked partners, and the partners dropped.
-
-    Shared with train_locator.py, so every training step leaves out the same sequences.
-    """
-    train_ids = filter_numbers(splits["train"], exclude)
-    linked = set()
-    if exclude:
-        everything = [sequence_id for name in ("train", "val", "test") for sequence_id in splits[name]]
-        linked = held_out_partners(json.loads(Path(issues_path).read_text()), everything, exclude) & set(train_ids)
-        train_ids = [sequence_id for sequence_id in train_ids if sequence_id not in linked]
-        print(f"dropped {len(linked)} train sequences linked to held-out numbers: {sorted(linked)}")
-    return train_ids, linked
-
-
-def save_batch_grid(batch, path):
-    """Save a batch as the model sees it: one sequence per row, the anchor last, padding black."""
-    images = torch.cat([batch["frames"], batch["anchor"][:, None]], dim=1)  # (B, T+1, 3, H, W)
-    images = denormalize(images)
-    images[:, :-1][~batch["mask"]] = 0
-    save_image(make_grid(images.flatten(0, 1), nrow=images.shape[1]), path)
-    for row, sequence_id in enumerate(batch["sequence_id"]):
-        print(f"row {row}: {sequence_id.split('/')[0]:>2}  {sequence_id}")
-
-
-def plot_curves(history, best_epoch, path):
-    """Plot loss, accuracy, two-digit and macro accuracy per epoch, with the best epoch marked."""
-    figure, axes = plt.subplots(1, 4, figsize=(20, 4))
-    panels = [("loss", ["train", "train_check", "val"]), ("accuracy", ["train_check", "val"]),
-              ("two_digit_accuracy", ["train_check", "val"]), ("macro_accuracy", ["train_check", "val"])]
-    for axis, (metric, sources) in zip(axes, panels):
-        for source in sources:
-            key = "train_loss" if source == "train" else f"{source}_{metric}"
-            label = "train (running, augmented)" if source == "train" else source
-            # The running train loss has no epoch 0, since nothing was trained yet.
-            points = [(entry["epoch"], entry[key]) for entry in history if entry[key] is not None]
-            axis.plot(*zip(*points), marker=".", label=label)
-        axis.axvline(best_epoch, color="grey", linestyle="--", linewidth=1)
-        axis.set_title(metric.replace("_", " "))
-        axis.set_xlabel("epoch")
-        axis.xaxis.set_major_locator(MaxNLocator(integer=True))
-        axis.legend()
-    figure.tight_layout()
-    figure.savefig(path, dpi=100)
-    plt.close(figure)
-
-
-def load_pairs(args, exclude, train_ids):
-    """The StripBank for splicing, after checking it cannot leak held-out or non-train data.
-
-    Raises:
-        ValueError: the bank may splice a held-out number, or holds sequences outside train.
-    """
-    bank = StripBank(args.pairs)
+def check_bank(bank, exclude, train_ids):
+    """Raises ValueError if the train boxes could paste a held-out number or come from outside train."""
     if bank.split != "train":
-        raise ValueError(f"{args.pairs} holds {bank.split} boxes; only train boxes may feed training")
-    missing = set(exclude) - set(bank.exclude)
-    if missing:
-        raise ValueError(f"{args.pairs} was made without holding out {sorted(missing)}, so it could splice them")
+        raise ValueError(f"the bank holds {bank.split} boxes; only train boxes may feed training")
+    if set(exclude) - set(bank.exclude):
+        raise ValueError(f"the bank was made without holding out {sorted(set(exclude) - set(bank.exclude))}")
     outside = set(bank.sequence_ids()) - set(train_ids)
     if outside:
-        raise ValueError(f"{args.pairs} has {len(outside)} sequences outside this run's train split, e.g. {min(outside)}")
-    print(f"splicing {args.synthetic_pairs:.0%} of single-digit samples into pairs and pasting "
-          f"{args.synthetic_singles:.0%} as singles, {len(bank.sequence_ids())} sequences "
-          f"located by {bank.locator}")
-    return bank
+        raise ValueError(f"the bank has {len(outside)} sequences outside this run's train split, e.g. {min(outside)}")
 
 
-def init_from(model, args, exclude):
-    """Load the weights of run --init-from into model, after checking they cannot leak.
-
-    Raises:
-        ValueError: the run used another reader, variant or split, or did not hold out
-            every number this run holds out (its weights would have seen them).
-    """
-    run_dir = args.out / args.init_from
-    checkpoint = torch.load(run_dir / "best.pt", map_location="cpu")
-    config = checkpoint["config"]
-    if config.get("reader", "fused") != args.reader or config["variant"] != args.variant:
-        raise ValueError(f"{run_dir} is a {config.get('reader', 'fused')} {config['variant']} run, "
-                         f"not {args.reader} {args.variant}")
-    missing = set(exclude) - set(config["exclude"])
-    if missing:
-        raise ValueError(f"{run_dir} did not hold out {sorted(missing)}, so its weights saw them")
-    if json.loads((run_dir / "splits.json").read_text()) != json.loads(args.splits.read_text()):
-        raise ValueError(f"{run_dir} was trained with another split than {args.splits}")
-    model.load_state_dict(checkpoint["model"])
-    print(f"starting from {run_dir}, epoch {checkpoint['epoch']}")
+def save_box_pictures(data_dir, boxes):
+    """strips.png (100 kept train boxes, to count by eye how many sit on the digit), spliced.png and pasted.png."""
+    kept = [image for images in json.loads((boxes / "train.json").read_text())["sequences"].values()
+            for image in images if image["kept"]]
+    bank = StripBank(boxes / "train.json")
+    plots.boxes(data_dir, kept, boxes / "strips.png")
+    plots.pastes(data_dir, bank, boxes / "spliced.png", single=False)
+    plots.pastes(data_dir, bank, boxes / "pasted.png", single=True)
+    print(f"boxes in {boxes}: count how many of the boxes on strips.png sit on the digit")
 
 
-def make_loader(dataset, args, device, sampler=None):
-    return DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=sampler,
-        num_workers=args.workers,
-        pin_memory=device.type == "cuda",
-        persistent_workers=args.workers > 0,
-    )
+def train_stage(model, stage, run, stage_dir, step0, keep_start):
+    """Train one stage into stage_dir; leave the best epoch's weights in model. Returns its history."""
+    args, device = run["args"], run["device"]
+    train_set = JerseyDataset(args.data, run["train_ids"], augment=True, load_anchor=True,
+                              max_frames=run["approach"].max_frames, pastes=run["bank"], pair_share=stage.pair_share,
+                              single_share=stage.single_share, real_pairs=stage.real_pairs)
+    fit_ids = train_set.sequence_ids  # the sequences actually trained on: sampler and train-check agree
+    picked = torch.randperm(len(fit_ids), generator=torch.Generator().manual_seed(args.seed))[:TRAIN_CHECK_SIZE]
+    train_loader = make_loader(train_set, args.batch_size, args.workers, device, sampler=make_sampler(fit_ids))
+    check_loader = make_loader(JerseyDataset(args.data, sorted(fit_ids[i] for i in picked.tolist()),
+                                             max_frames=run["approach"].max_frames), args.batch_size, args.workers, device)
+    epochs = args.epochs or stage.epochs
+    optimizer, scheduler = make_optimizer(model, stage.lr, stage.backbone_lr, epochs * len(train_loader))
+    stage_dir.mkdir(parents=True, exist_ok=True)  # main() refuses a run folder that already exists
+    shutil.copy(args.results / "splits.json", stage_dir / "splits.json")
+    config = {**run["config"], "stage": asdict(stage), "sequences": {"train": len(fit_ids), "val": len(run["val_ids"])}}
+    (stage_dir / "config.json").write_text(json.dumps(config, indent=2))
+    plots.batch_grid(next(iter(train_loader)), stage_dir / "train_batch.png")
+
+    def score(epoch, train_loss, start):
+        check, val = scores(evaluate(model, check_loader, device)), scores(evaluate(model, run["val_loader"], device))
+        return {"epoch": epoch, "step": step0 + epoch, "train_loss": train_loss,
+                **{f"train_check_{k}": v for k, v in check.items()}, **{f"val_{k}": v for k, v in val.items()},
+                **(pair_metrics(model, run["pair_set"], device) if run["pair_set"] else {}),
+                "seconds": time.perf_counter() - start}
+
+    def save(entry):
+        state = {k: v.cpu() for k, v in model.state_dict().items()}
+        torch.save({"model": state, "epoch": entry["epoch"], "config": config}, stage_dir / "best.pt")
+        return entry, state
+
+    history = [score(0, None, time.perf_counter())]
+    print(f"{stage_dir.name} epoch 0  val loss {history[0]['val_loss']:.3f} (uniform guess {UNIFORM_LOSS:.3f})")
+    best, best_state = save(history[0]) if keep_start else (None, None)
+    for epoch in range(1, epochs + 1):
+        start = time.perf_counter()
+        current = score(epoch, train_one_epoch(model, train_loader, optimizer, scheduler, device), start)
+        history.append(current)
+        value, best_value = current[stage.selected_by], best and best[stage.selected_by]
+        if best is None or (value > best_value if stage.highest else value < best_value):
+            best, best_state = save(current)
+        (stage_dir / "history.json").write_text(json.dumps({"epochs": history, "best": best}, indent=2))
+        plots.curves(history, stage_dir / "curves.png")
+        pairs = f"  pairs {current['pair_accuracy']:.3f}" if "pair_accuracy" in current else ""
+        print(f"{stage_dir.name} epoch {epoch:>2}/{epochs}  train loss {current['train_loss']:.3f}"
+              f"  val loss {current['val_loss']:.3f} acc {current['val_accuracy']:.3f}"
+              f" two-digit {current['val_two_digit_accuracy']:.3f}{pairs}  {current['seconds']:.0f}s"
+              f"{'  *' if best is current else ''}")
+    model.load_state_dict(best_state)
+    print(f"{stage_dir.name}: best epoch {best['epoch']} by {stage.selected_by} {best[stage.selected_by]:.3f}")
+    return history
 
 
 def main(argv=None):
     args = parse_args(argv)
-    # Covers model init, sampler, augmentation and the train-check pick (see data.py).
     torch.manual_seed(args.seed)
     device = pick_device(args.device)
+    approach, exclude = APPROACHES[args.approach], tuple(args.exclude)
+    tag = tag_of(exclude)
+    run_dir = args.results / "runs" / (f"{args.approach}_{tag}" + (f"_s{args.seed}" if args.seed else ""))
+    if run_dir.exists():
+        raise SystemExit(f"{run_dir} exists: results are never overwritten")
 
-    splits = json.loads(args.splits.read_text())
-    exclude = tuple(args.exclude)
-    train_ids, linked = training_ids(splits, exclude, args.issues)
+    splits = read_splits(args.results / "splits.json")
+    issues = json.loads((args.results / "data_issues.json").read_text())
+    train_ids, linked = split_ids(splits, "train", exclude, issues)
     val_ids = filter_numbers(splits["val"], exclude)
-    if args.no_real_pairs and args.val_pairs is None:
-        raise ValueError("--no-real-pairs picks the best epoch by pair_accuracy, so it needs --val-pairs")
-    selected_by = SELECTED_BY_NO_REAL_PAIRS if args.no_real_pairs else SELECTED_BY
-    higher_wins = selected_by == SELECTED_BY_NO_REAL_PAIRS
-    pasting = args.synthetic_pairs > 0 or args.synthetic_singles > 0
-    pairs = load_pairs(args, exclude, train_ids) if pasting else None
-    pair_set = None
-    if args.val_pairs is not None:
-        pair_set = build_pair_set(args.val_pairs, val_ids, exclude, args.data, seed=args.seed)
-        print(f"pair metric on {len(pair_set['labels'])} spliced val pairs from {args.val_pairs}")
+    print(f"held out {list(exclude)}; dropped {len(linked)} linked train sequences")
 
-    def dataset(ids, **options):
-        return JerseyDataset(args.data, ids, max_frames=args.max_frames, **options)
+    boxes = args.results / "boxes" / tag
+    pastes = any(stage.pair_share or stage.single_share for stage in approach.stages)
+    if pastes and not (boxes / "train.json").exists():
+        make_boxes(args.data, boxes, train_ids, split_ids(splits, "val", exclude, issues)[0], exclude, device,
+                   epochs=LOCATOR_EPOCHS, workers=args.workers, pretrained=not args.no_pretrained)
+        save_box_pictures(args.data, boxes)
+    bank = StripBank(boxes / "train.json") if pastes else None
+    if bank is not None:
+        check_bank(bank, exclude, train_ids)
+    pair_set = build_pair_set(boxes / "val.json", val_ids, exclude, args.data, seed=args.seed) \
+        if (boxes / "val.json").exists() else None
 
-    train_set = dataset(train_ids, augment=True, load_anchor=True, policy=args.augment,
-                        pairs=pairs, pair_share=args.synthetic_pairs, real_pairs=not args.no_real_pairs,
-                        single_share=args.synthetic_singles)
-    # The sequences actually trained on, so sampler, train-check and shot bands agree with the dataset.
-    fit_ids = train_set.sequence_ids
-    picked = torch.randperm(len(fit_ids), generator=torch.Generator().manual_seed(args.seed))
-    check_ids = sorted(fit_ids[i] for i in picked[:args.train_check_size].tolist())
-    train_loader = make_loader(train_set, args, device, sampler=make_sampler(fit_ids, args.sampler_power))
-    check_loader = make_loader(dataset(check_ids), args, device)
-    val_loader = make_loader(dataset(val_ids), args, device)
+    count_offset = count_prior([number_of(s) for s in train_ids]) if approach.reader == "two-step" else 0.0
+    model = JerseyModel(approach.reader, approach.temporal, max_frames=approach.max_frames,
+                        pretrained=not args.no_pretrained, count_offset=count_offset).to(device)
+    config = {"approach": args.approach, "reader": approach.reader, "temporal": approach.temporal,
+              "max_frames": approach.max_frames, "exclude": list(exclude), "linked_dropped": sorted(linked),
+              "seed": args.seed, "count_offset": count_offset, "data": str(args.data), "device": str(device),
+              "parameters": sum(p.numel() for p in model.parameters()), "torch": str(torch.__version__)}
+    run = {"args": args, "device": device, "approach": approach, "train_ids": train_ids, "val_ids": val_ids,
+           "bank": bank, "pair_set": pair_set, "config": config,
+           "val_loader": make_loader(JerseyDataset(args.data, val_ids, max_frames=approach.max_frames),
+                                     args.batch_size, args.workers, device)}
+    print(f"run {run_dir}: {config['parameters']:,} parameters on {device}, count offset {count_offset:.2f}")
 
-    model = JerseyModel(args.variant, max_frames=args.max_frames, pretrained=not args.no_pretrained, reader=args.reader)
-    if args.init_from:
-        init_from(model, args, exclude)
-    model.to(device)
-    # From the train split's numbers, real two-digit ones included even when they are not
-    # trained on (stage 1): the prior is the data's mix, never val's or the held-out numbers'.
-    if args.reader == "two-step" and not args.no_count_prior:
-        model.count_offset = count_prior([sequence_id.split("/")[0] for sequence_id in train_ids])
-    backbone = [p for name, p in model.named_parameters() if name.startswith("backbone.")]
-    rest = [p for name, p in model.named_parameters() if not name.startswith("backbone.")]
-    # The order of the groups matters: max_lr below and the logged rates follow it.
-    optimizer = torch.optim.AdamW(
-        [{"params": rest, "lr": args.lr}, {"params": backbone, "lr": args.backbone_lr}],
-        weight_decay=args.weight_decay,
-    )
-    scheduler = None
-    if args.schedule == "onecycle":
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=[args.lr, args.backbone_lr],
-            total_steps=args.epochs * len(train_loader),
-            pct_start=WARMUP_SHARE,
-            cycle_momentum=False,
-        )
+    step = 0
+    for index, stage in enumerate(approach.stages):
+        last = index == len(approach.stages) - 1
+        history = train_stage(model, stage, run, run_dir if last else run_dir / f"stage{index + 1}", step, keep_start=index > 0)
+        step = history[-1]["step"]
 
-    run_dir = args.out / (args.run_name or f"{args.variant}_{datetime.now():%Y%m%d-%H%M%S}")
-    run_dir.mkdir(parents=True)  # fails if the run exists, so results are never overwritten
-    # The split as trained, so evaluate.py scores the right sequences even after make_splits.py reruns.
-    shutil.copy(args.splits, run_dir / "splits.json")
-    config = {
-        **{key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
-        "device": str(device),
-        # A plain str: torch's own version type would block loading best.pt with weights_only.
-        "torch": str(torch.__version__),
-        "parameters": sum(p.numel() for p in model.parameters()),
-        "sequences": {"train": len(fit_ids), "train_check": len(check_ids), "val": len(val_ids)},
-        # Train sequences of other numbers left out of a hold-out run, for evaluate.py.
-        "linked_dropped": sorted(linked),
-        "selected_by": selected_by,
-        "selected_highest": higher_wins,
-        "count_offset": model.count_offset,
-    }
-    (run_dir / "config.json").write_text(json.dumps(config, indent=2))
-    print(f"run {run_dir}, {config['parameters']:,} parameters on {device}"
-          + (f", count offset {model.count_offset:.2f}" if args.reader == "two-step" else ""))
-
-    save_batch_grid(next(iter(train_loader)), run_dir / "train_batch.png")
-
-    def score_epoch(epoch, train_loss, start):
-        """Return the history entry for an epoch, scoring train-check and val."""
-        check = scores(evaluate(model, check_loader, device))
-        val = scores(evaluate(model, val_loader, device))
-        found = pair_metrics(model, pair_set, device) if pair_set is not None else {}
-        return {
-            "epoch": epoch,
-            "lr": optimizer.param_groups[0]["lr"],
-            "backbone_lr": optimizer.param_groups[1]["lr"],
-            "train_loss": train_loss,
-            **{f"train_check_{key}": value for key, value in check.items()},
-            **{f"val_{key}": value for key, value in val.items()},
-            **found,
-            "seconds": time.perf_counter() - start,
-        }
-
-    def pair_text(entry):
-        if pair_set is None:
-            return ""
-        return (f"  pairs {entry['pair_accuracy']:.3f} second right {entry['second_is_right']:.3f}"
-                f" left {entry['second_is_left']:.3f} gap {entry['left_right_gap']:.2f}"
-                f" singles {entry['singles_accuracy']:.3f} pasted singles {entry['pasted_singles_accuracy']:.3f}")
-
-    # Before training the model should guess about uniformly. A loss far from
-    # UNIFORM_LOSS points to a bug in the init, the labels or the loss (Karpathy's recipe).
-    history, best = [score_epoch(0, None, time.perf_counter())], None
-    print(f"epoch  0/{args.epochs}  val loss {history[0]['val_loss']:.3f}"
-          f" (uniform guess {UNIFORM_LOSS:.3f})  two-digit {history[0]['val_two_digit_accuracy']:.3f}"
-          f"  val acc {history[0]['val_accuracy']:.3f}{pair_text(history[0])}")
-
-    for epoch in range(1, args.epochs + 1):
-        start = time.perf_counter()
-        train_loss = train_one_epoch(model, train_loader, optimizer, device, args.anchor_weight, scheduler,
-                                     args.attention_weight, args.count_weight)
-        current = score_epoch(epoch, train_loss, start)
-        history.append(current)
-
-        if best is None:
-            improved = True
-        elif higher_wins:
-            improved = current[selected_by] > best[selected_by]
-        else:
-            improved = current[selected_by] < best[selected_by]
-        if improved:
-            best = current
-            # Weights on the CPU, so they load on any machine. The config says how to
-            # rebuild the model (variant, max_frames) without config.json.
-            torch.save({
-                "model": {key: value.cpu() for key, value in model.state_dict().items()},
-                "epoch": epoch,
-                "config": config,
-            }, run_dir / "best.pt")
-        # Rewritten every epoch, so a crash or Ctrl-C keeps everything so far.
-        (run_dir / "history.json").write_text(json.dumps({"epochs": history, "best": best}, indent=2))
-        plot_curves(history, best["epoch"], run_dir / "curves.png")
-        print(
-            f"epoch {epoch:>2}/{args.epochs}  train loss {train_loss:.3f}"
-            f"  check acc {current['train_check_accuracy']:.3f} macro {current['train_check_macro_accuracy']:.3f}"
-            f"  val loss {current['val_loss']:.3f} two-digit {current['val_two_digit_accuracy']:.3f}"
-            f" acc {current['val_accuracy']:.3f}"
-            f" macro {current['val_macro_accuracy']:.3f} macro5 {current['val_macro_accuracy_5']:.3f}"
-            f"{pair_text(current)}  {current['seconds']:.0f}s{'  *' if improved else ''}"
-        )
-
-    print(f"best epoch {best['epoch']} by {'highest' if higher_wins else 'lowest'} {selected_by}:"
-          f" val loss {best['val_loss']:.3f},"
-          f" two-digit {best['val_two_digit_accuracy']:.3f}, accuracy {best['val_accuracy']:.3f},"
-          f" macro {best['val_macro_accuracy']:.3f}, macro5 {best['val_macro_accuracy_5']:.3f}{pair_text(best)}")
-
-    # Score the best weights per number, the detail the history leaves out.
-    model.load_state_dict(torch.load(run_dir / "best.pt")["model"])
-    result = evaluate(model, val_loader, device)
-    train_numbers = [sequence_id.split("/")[0] for sequence_id in fit_ids]
-    table = per_number(result["predictions"], result["labels"])
-    report = {
-        "epoch": best["epoch"],
-        "split": "val",
-        "scores": scores(result),
-        "per_number": table,
-        "bands": band_accuracy(result["predictions"], result["labels"], shot_bands(train_numbers)),
-        "confusions": confusions(result["predictions"], result["labels"]),
-        "majority_baseline": majority_baseline(result["labels"], train_numbers),
-    }
-    (run_dir / "per_number.json").write_text(json.dumps(report, indent=2))
-    for number, row in table.items():
-        print(f"  {number:>2}: {row['correct']:>3}/{row['count']:<3} {row['accuracy']:.3f}"
-              f"  (95% {row['low']:.2f}-{row['high']:.2f})")
-
-    explain_run(model, val_loader.dataset, config, run_dir, device)
 
 if __name__ == "__main__":
     main()

@@ -1,32 +1,38 @@
 """The network: reads a jersey number as two digits from a sequence of player crops.
 
     frames (B, T, 3, H, W)
-      -> CNN on each frame          -> a grid of cells per frame
-      -> two digit queries          -> frame tokens (B, T, 2, D): first and second digit
-      -> combine the frames         -> (B, 2, D)
-      -> shared classifier          -> logits (B, 2, 11): digits 0-9 plus BLANK
+      -> backbone on each real frame     local cells (1/8 of the input) and deep cells (1/16)
+      -> reader                          digit tokens per frame (B, T, Q, D)
+      -> frame combiner                  one token per query for the sequence (B, Q, D)
+      -> the reader's classifier         log-probabilities (B, 2, 11): digits 0-9 plus BLANK
 
-The variants differ only in how the frames are combined, so the report can show
-what each part adds:
-    averaged  plain mean over the real frames
-    pooled    learned weighted mean (attention pooling)
-    full      a transformer lets frames see each other, then attention pooling
+Every number is two positions, each a digit or BLANK ("4" is 4, BLANK), read by one shared digit
+classifier. A digit learned in one position or number counts for every other one, so 94 can be
+read after training on 4, 9 and 49: nothing is a 100-class label.
 
-Two readers turn a frame into digit tokens:
-    fused     two queries over cells that mix deep and local features (the first reader)
+Readers (READERS), each with its own pretrained part (backbone), forward(images) -> tokens (N, Q, D),
+attention (N, Q, C), count logits (N, 2) or None, and logits(tokens, count, count_offset) -> (..., 2, 11):
+    fused     two queries (first, second digit) over cells that mix deep and local features.
+              Simple, but each cell sees the whole crop, so it cannot learn left from right
+              from this data: the baseline that shows the two-digit structure alone is not enough.
     two-step  deep features decide where to look, local features alone what is there:
+                local -> LocalHead -> values; deep -> keys (+ cell positions, side bias)
+                deep -> count logits (one digit or two)
+                three queries (single, left, right), one head -> tokens (N, 3, D)
+              No deep feature reaches the values or the classifier, so the left query cannot
+              read the right digit without looking at it. compose turns the three readings and
+              the count into the same (2, 11) output.
+    parseq    PARSeq-Tiny, a scene text reader pretrained on millions of text images
+              (jersey/parseq.py), on the number area of the frame stretched to its 32 x 128
+              line: two position queries read digit 1 and digit 2 (or "end") from the image
+              alone. It learned every digit in every position before seeing this data. With the
+              pool combiner, a learned gate per position weighs the frames; the head is linear,
+              so the weighted mean of features is a weighted mean of the frames' scores.
 
-        images -> backbone[:4] -> local (24 x 12 cells, each about one digit wide)
-        local -> backbone[4:] -> deep -> upsampled to 24 x 12 -> keys (+ positions, side bias)
-        deep -> global average -> count logits (one digit or two)
-        local -> LocalHead -> values
-        three queries (single, left, right), one head: keys choose cells, values give content
-        -> tokens (N, 3, D) -> frame combining -> one shared 10-class classifier
-
-      No deep feature reaches the values or the classifier, so a token can only carry what
-      the cells it attends to show: the left query cannot read the right digit without
-      looking at it. The three readings and the count make the same (2, 11) output as the
-      fused reader (compose), so evaluation, explanation and metrics work for both.
+Frame combiners (TEMPORAL), each forward(tokens (B, T, Q, D), mask (B, T)) -> (B, Q, D), weights:
+    mean         plain mean over the real frames
+    pool         learned weighted mean (attention pooling)
+    transformer  one transformer layer lets frames see each other, then attention pooling
 
 Shapes: B batch, T frames, Q queries, N images, C cells per frame, D feature size.
 """
@@ -39,38 +45,32 @@ from torch import nn
 from torch.nn import functional as F
 from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
 
-from jersey.data import BLANK, IMAGE_SIZE, MAX_FRAMES
+from jersey import parseq
+from jersey.data import BLANK, IMAGENET_MEAN, IMAGENET_STD, IMAGE_SIZE, MAX_FRAMES
 
-VARIANTS = ("averaged", "pooled", "full")
-READERS = ("fused", "two-step")
 NUM_CLASSES = 11  # digits 0-9 plus BLANK
 DIGITS = 10
-# The first 9 MobileNetV3-Small blocks: 48 channels at 1/16 of the input size.
-# 0.19M parameters instead of 0.93M for all blocks.
+# The first 9 MobileNetV3-Small blocks: 48 channels at 1/16 of the input. 0.19M parameters
+# instead of 0.93M for all blocks. Block 3's output, at 1/8 of the input with a 31-pixel view
+# (about one digit), gives the local cells: 192 x 96 gives 24 x 12 cells.
 BACKBONE_BLOCKS = 9
 BACKBONE_CHANNELS = 48
 BACKBONE_STRIDE = 16
-# Each deep cell summarises the whole crop (squeeze-excitation, wide view), so two digit
-# queries get the same content and read the same digit twice. Block 3's output, at 1/8 of
-# the input with a 31-pixel view (about one digit), is added to the deep cells upsampled to
-# its grid, FPN-style: each cell keeps the deep reading power and gains its own local
-# detail, so the queries on either side see different digits. 192 x 96 gives 24 x 12 cells.
 LOCAL_BLOCKS = 4
 LOCAL_CHANNELS = 24
 CELL_STRIDE = 8
 HEADS = 4
-# Each digit query starts on its own side: a soft bias on its attention scores that
-# falls off with the distance from a point left (first digit) or right (second digit)
-# of the middle. Fixed, so the start cannot drift back to the middle. In pixels of the
-# input, so the bias sits in the same place on the digits whatever the grid.
-SIDE_OFFSET = 8
-SIDE_WIDTH = 12
-# The two-step reader's queries: single starts at the centre, left and right THREE_SIDE_OFFSET
-# pixels to either side, about half a digit plus half the gap. Narrower and further out than
-# SIDE_OFFSET / SIDE_WIDTH, so left and right start on different digits. Tuned once.
-THREE_SIDE_OFFSET = 14
-THREE_SIDE_WIDTH = 8
 VALUE_CHANNELS = 128
+# Each digit query starts on its own side: a fixed soft bias on its attention scores that falls
+# off with the distance (in input pixels) from its starting column. Fused: first and second
+# digit 8 px either side of the middle. Two-step: single at the middle, left and right 14 px out,
+# about half a digit plus half the gap, narrower so left and right start on different digits.
+FUSED_SIDES, FUSED_WIDTH = (-8, 8), 12
+TWO_STEP_SIDES, TWO_STEP_WIDTH = (0, -14, 14), 8
+# The number area PARSeq reads, as shares of the crop: tighter than data.TORSO_ROWS/COLUMNS, so the
+# digits fill more of its text line; it holds 94% of the digit boxes found in train whole.
+PARSEQ_ROWS, PARSEQ_COLUMNS = (0.17, 0.48), (0.15, 0.85)
+CELL_GRID = (IMAGE_SIZE[0] // CELL_STRIDE, IMAGE_SIZE[1] // CELL_STRIDE)
 
 
 def make_backbone(pretrained):
@@ -79,14 +79,23 @@ def make_backbone(pretrained):
     return mobilenet_v3_small(weights=weights).features[:BACKBONE_BLOCKS]
 
 
+def side_bias(rows, columns, offsets, width, stride=CELL_STRIDE):
+    """Bias on the attention scores of the queries: (len(offsets), rows * columns).
+
+    0 at each query's own column (the middle plus its offset, in pixels), -(distance / width)^2 / 2 elsewhere.
+    """
+    centres = columns * stride / 2 + torch.tensor(offsets, dtype=torch.float)
+    x = (torch.arange(columns, dtype=torch.float) + 0.5) * stride  # cell centres
+    bias = -((x - centres[:, None]) / width) ** 2 / 2  # (Q, columns)
+    return bias[:, None, :].expand(len(offsets), rows, columns).reshape(len(offsets), rows * columns)
+
+
 class Residual1x1(nn.Module):
     """x + ReLU(BN(conv1x1(x))): mixes channels within a cell, never across cells."""
 
     def __init__(self, channels):
         super().__init__()
-        self.layer = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=1, bias=False), nn.BatchNorm2d(channels), nn.ReLU(),
-        )
+        self.layer = nn.Sequential(nn.Conv2d(channels, channels, 1, bias=False), nn.BatchNorm2d(channels), nn.ReLU())
 
     def forward(self, x):
         return x + self.layer(x)
@@ -95,10 +104,9 @@ class Residual1x1(nn.Module):
 class LocalHead(nn.Module):
     """Local features (N, LOCAL_CHANNELS, h, w) -> (N, dim, h, w), seeing about one digit per cell.
 
-    One 3 x 3 convolution, then 1 x 1 residual layers. No squeeze-excitation or pooling, so a
-    cell's output depends only on the pixels near it: block 3's 31-pixel view plus one cell
-    each side. (Block 1 of the backbone has squeeze-excitation, a global channel gate, so the
-    input is not strictly local: a far change moves a cell slightly, not much.)
+    One 3 x 3 convolution, then 1 x 1 residual layers: no pooling, so a cell depends only on the
+    pixels near it. (Block 1 of the backbone has a squeeze-excitation channel gate, which saturates
+    with the pretrained weights: a far change moves a cell not at all, or very slightly.)
     """
 
     def __init__(self, dim=128, layers=2, in_channels=LOCAL_CHANNELS):
@@ -112,332 +120,303 @@ class LocalHead(nn.Module):
         return self.layers(local)
 
 
-class DigitQueries(nn.Module):
-    """Two learned queries search a frame's cells: one for the first digit, one for the second."""
-
-    def __init__(self, dim, grid):
-        super().__init__()
-        rows, columns = grid
-        self.queries = nn.Parameter(torch.randn(1, 2, dim) * 0.02)
-        # Attention treats the cells as an unordered set. A learned position per cell
-        # is what lets the queries tell left from right. It goes into the keys only, as in
-        # DETR: it decides where a query looks, but is kept out of what the token carries.
-        self.cell_positions = nn.Parameter(torch.randn(1, rows * columns, dim) * 0.02)
-        self.register_buffer("side_bias", side_bias(rows, columns), persistent=False)
-        self.attention = nn.MultiheadAttention(dim, HEADS, batch_first=True)
-        self.norm = nn.LayerNorm(dim)
-
-    def forward(self, cells):
-        queries = self.queries.expand(len(cells), -1, -1)  # (N, 2, D)
-        # (N, 2, D), (N, 2, C); cells (N, C, D). A float attn_mask is added to the scores.
-        digits, attention = self.attention(
-            queries, cells + self.cell_positions, cells, attn_mask=self.side_bias,
-        )
-        # Kept to show where each query looks, averaged over the heads.
-        self.last_attention = attention.detach()
-        return self.norm(digits)
-
-
-def side_bias(rows, columns, stride=CELL_STRIDE, offsets=(-SIDE_OFFSET, SIDE_OFFSET), width=SIDE_WIDTH):
-    """Bias on the attention scores of the digit queries: (len(offsets), rows * columns).
-
-    0 at each query's own centre (the middle plus its offset, in pixels), and
-    -(distance / width)^2 / 2 elsewhere, with the distance in pixels from the middle of
-    each column of cells. The default is the fused reader's: first left, second right.
-    """
-    middle = columns * stride / 2
-    centres = middle + torch.tensor(offsets, dtype=torch.float)
-    x = (torch.arange(columns, dtype=torch.float) + 0.5) * stride  # (columns,) cell centres
-    bias = -((x - centres[:, None]) / width) ** 2 / 2  # (Q, columns)
-    return bias[:, None, :].expand(len(offsets), rows, columns).reshape(len(offsets), rows * columns)
-
-
-class ThreeQueryReader(nn.Module):
-    """Single, left and right queries: keys from deep cells choose where, values from local cells give what.
-
-    One attention head, so each query's map is exactly the weights its token is made of.
-    """
-
-    QUERIES = ("single", "left", "right")
-
-    def __init__(self, dim, grid, value_channels=VALUE_CHANNELS):
-        super().__init__()
-        rows, columns = grid
-        self.queries = nn.Parameter(torch.randn(1, 3, dim) * 0.02)
-        # In the keys only, as in DigitQueries: positions decide where a query looks.
-        self.cell_positions = nn.Parameter(torch.randn(1, rows * columns, dim) * 0.02)
-        bias = side_bias(rows, columns, offsets=(0, -THREE_SIDE_OFFSET, THREE_SIDE_OFFSET), width=THREE_SIDE_WIDTH)
-        self.register_buffer("side_bias", bias, persistent=False)
-        self.attention = nn.MultiheadAttention(dim, 1, batch_first=True, kdim=dim, vdim=value_channels)
-        self.norm = nn.LayerNorm(dim)
-
-    def forward(self, keys, values):
-        """Keys (N, C, D) and values (N, C, value_channels) -> tokens (N, 3, D) and attention (N, 3, C)."""
-        queries = self.queries.expand(len(keys), -1, -1)
-        tokens, attention = self.attention(queries, keys + self.cell_positions, values, attn_mask=self.side_bias)
-        # Kept for explain.py: left and right as the fused reader's two digits, and all three.
-        self.last_attention = attention[:, 1:].detach()
-        self.all_attention = attention.detach()
-        return self.norm(tokens), attention
-
-
 def compose(digit_logits, count_logits):
-    """The two-step readings as the fused reader's output: log-probabilities (..., 2, 11).
+    """The two-step readings as the (2, 11) output: log-probabilities (..., 2, 11).
 
-    digit_logits (..., 3, 10) for single, left and right; count_logits (..., 2) for one and
-    two digits. Each position sums to 1:
+    digit_logits (..., 3, 10) for single, left and right; count_logits (..., 2) for one and two
+    digits. Each position sums to 1:
         position 1, digit d   P(one) P_single(d) + P(two) P_left(d)
         position 1, BLANK     0
         position 2, digit d   P(two) P_right(d)
         position 2, BLANK     P(one)
     """
-    digits = digit_logits.log_softmax(dim=-1)
-    count = count_logits.log_softmax(dim=-1)
+    digits, count = digit_logits.log_softmax(dim=-1), count_logits.log_softmax(dim=-1)
     one, two = count[..., :1], count[..., 1:]
-    first = torch.logaddexp(one + digits[..., 0, :], two + digits[..., 1, :])
-    first = torch.cat([first, torch.full_like(one, float("-inf"))], dim=-1)
+    first = torch.cat([torch.logaddexp(one + digits[..., 0, :], two + digits[..., 1, :]),
+                       torch.full_like(one, float("-inf"))], dim=-1)
     second = torch.cat([two + digits[..., 2, :], one], dim=-1)
     return torch.stack([first, second], dim=-2)
 
 
-def masked_mean(values, mask):
-    """Mean over the real frames: (B, T, ...) -> (B, ...), e.g. tokens (B, T, Q, D) -> (B, Q, D)."""
-    weights = mask.reshape(*mask.shape, *[1] * (values.dim() - 2)).float()  # 1 for real frames
-    return (values * weights).sum(dim=1) / weights.sum(dim=1)
-
-
-class AttentionPool(nn.Module):
-    """Weighted mean over the real frames, with a learned score per frame (Ilse et al. 2018)."""
-
-    def __init__(self, dim):
-        super().__init__()
-        self.score = nn.Sequential(nn.Linear(dim, dim // 2), nn.Tanh(), nn.Linear(dim // 2, 1))
-
-    def forward(self, tokens, mask):
-        """Return the pooled tokens (B, Q, D) and the frame weights (B, T, Q)."""
-        scores = self.score(tokens).squeeze(-1)  # (B, T, Q)
-        scores = scores.masked_fill(~mask[:, :, None], float("-inf"))
-        weights = scores.softmax(dim=1)  # (B, T, Q), sums to 1 over the real frames
-        return (weights[..., None] * tokens).sum(dim=1), weights
-
-
-class TemporalEncoder(nn.Module):
-    """One transformer layer: each frame's digit token sees the same digit in the other frames."""
-
-    def __init__(self, dim, max_frames, dropout):
-        super().__init__()
-        # Unlike the mean and the pooling, the transformer can use frame order.
-        self.frame_positions = nn.Parameter(torch.randn(1, max_frames, dim) * 0.02)
-        self.layer = nn.TransformerEncoderLayer(
-            dim, HEADS, dim_feedforward=2 * dim, dropout=dropout,
-            batch_first=True, norm_first=True,
-        )
-        # A pre-norm layer leaves its output unnormalised, so normalise once at the end.
-        self.norm = nn.LayerNorm(dim)
-
-    def forward(self, tokens, mask):
-        B, T, Q, D = tokens.shape
-        # Each query becomes its own sequence of T frames.
-        x = tokens.transpose(1, 2).reshape(B * Q, T, D)  # (B*Q, T, D)
-        x = x + self.frame_positions[:, :T]
-        padding = (~mask).repeat_interleave(Q, dim=0)  # (B*Q, T), True where padded
-        x = self.norm(self.layer(x, src_key_padding_mask=padding))
-        return x.reshape(B, Q, T, D).transpose(1, 2)  # (B, T, Q, D)
-
-
-class JerseyModel(nn.Module):
-    """Reads a jersey number from a sequence of crops. See the module docstring."""
-
-    def __init__(
-        self,
-        variant="full",
-        dim=128,
-        image_size=IMAGE_SIZE,
-        max_frames=MAX_FRAMES,
-        pretrained=True,
-        dropout=0.1,
-        reader="fused",
-    ):
-        super().__init__()
-        if variant not in VARIANTS:
-            raise ValueError(f"unknown variant {variant!r}, expected one of {VARIANTS}")
-        if reader not in READERS:
-            raise ValueError(f"unknown reader {reader!r}, expected one of {READERS}")
-        # Otherwise the CNN grid and the cell positions disagree in size.
-        if image_size[0] % BACKBONE_STRIDE or image_size[1] % BACKBONE_STRIDE:
-            raise ValueError(f"image_size must be divisible by {BACKBONE_STRIDE}, got {image_size}")
-        self.variant = variant
-        self.reader = reader
-        # Added to the "one digit" count score when the readings are combined (compose), never to
-        # the count loss. The count loss weighs one and two digits equally, so the count head
-        # answers as if half of all numbers had two digits; count_prior gives the correction for
-        # the real mix. Not a weight: train.py saves it in config.json and load_run restores it.
-        self.count_offset = 0.0
-        # With pretrained weights, keep the backbone's ImageNet BatchNorm statistics fixed,
-        # so training and evaluation compute the same thing.
-        self.freeze_batchnorm = pretrained
-        self.backbone = make_backbone(pretrained)
-        grid = (image_size[0] // CELL_STRIDE, image_size[1] // CELL_STRIDE)
-        if reader == "fused":
-            self.project = nn.Conv2d(BACKBONE_CHANNELS, dim, kernel_size=1)
-            self.project_local = nn.Conv2d(LOCAL_CHANNELS, dim, kernel_size=1)
-            self.digits = DigitQueries(dim, grid)
-        else:
-            self.project_keys = nn.Conv2d(BACKBONE_CHANNELS, dim, kernel_size=1)
-            self.values = LocalHead(VALUE_CHANNELS)
-            self.count_head = nn.Linear(BACKBONE_CHANNELS, 2)
-            self.digits = ThreeQueryReader(dim, grid)
-        # Only build what this variant uses, so parameter counts compare fairly.
-        self.temporal = TemporalEncoder(dim, max_frames, dropout) if variant == "full" else None
-        self.pool = AttentionPool(dim) if variant in ("pooled", "full") else None
-        # One classifier for every position: a 9 learned as second digit also helps read a first 9.
-        self.classifier = nn.Linear(dim, NUM_CLASSES if reader == "fused" else DIGITS)
-        # Every number has a first digit, so BLANK is never allowed in position 1 (compose does
-        # the same for the two-step reader).
-        not_allowed = torch.zeros(2, NUM_CLASSES)
-        not_allowed[0, BLANK] = float("-inf")
-        self.register_buffer("not_allowed", not_allowed, persistent=False)
-        self.train()  # applies the BatchNorm freeze from the start, not only after .train()
-
-    def train(self, mode=True):
-        """Switch train/eval mode, but keep the backbone's BatchNorm statistics fixed if frozen."""
-        super().train(mode)
-        if self.freeze_batchnorm:
-            for layer in self.backbone.modules():
-                if isinstance(layer, nn.BatchNorm2d):
-                    layer.eval()
-        return self
-
-    def classify(self, tokens, count_logits=None):
-        """Digit tokens -> log-probabilities or logits (..., 2, 11).
-
-        Fused: tokens (..., 2, D). Two-step: tokens (..., 3, D) and count_logits (..., 2).
-        """
-        if self.reader == "fused":
-            return self.classifier(tokens) + self.not_allowed
-        shift = count_logits.new_tensor([self.count_offset, 0.0])
-        return compose(self.classifier(tokens), count_logits + shift)
-
-    def read(self, images):
-        """Single images (N, 3, H, W) -> tokens (N, Q, D), count logits (N, 2) and attention (N, Q, C).
-
-        Count logits and attention are None for the fused reader.
-        """
-        local = self.backbone[:LOCAL_BLOCKS](images)  # (N, LOCAL_CHANNELS, h, w), h = H / CELL_STRIDE
-        deep = self.backbone[LOCAL_BLOCKS:](local)  # (N, BACKBONE_CHANNELS, h / 2, w / 2)
-        if self.reader == "fused":
-            deep = F.interpolate(self.project(deep), size=local.shape[-2:], mode="bilinear", align_corners=False)
-            cells = deep + self.project_local(local)  # (N, D, h, w)
-            cells = cells.flatten(2).transpose(1, 2)  # (N, C, D), C = h * w
-            return self.digits(cells), None, None
-        keys = F.interpolate(self.project_keys(deep), size=local.shape[-2:], mode="bilinear", align_corners=False)
-        values = self.values(local)  # (N, VALUE_CHANNELS, h, w), from local features only
-        tokens, attention = self.digits(keys.flatten(2).transpose(1, 2), values.flatten(2).transpose(1, 2))
-        count_logits = self.count_head(deep.mean(dim=(2, 3)))  # (N, 2)
-        return tokens, count_logits, attention
-
-    def read_tokens(self, images):
-        """Single images (N, 3, H, W) -> digit tokens (N, Q, D): Q = 2 fused, 3 two-step."""
-        return self.read(images)[0]
-
-    def read_frames_full(self, images):
-        """Single images (N, 3, H, W) read one at a time: dict as forward's, without frame keys.
-
-        logits (N, 2, 11); for the two-step reader also digit_logits (N, 3, 10), count_logits
-        (N, 2) and attention (N, 3, C). Used for the anchor.
-        """
-        tokens, count_logits, attention = self.read(images)
-        out = {"logits": self.classify(tokens, count_logits), "tokens": tokens}
-        if self.reader == "two-step":
-            out.update(digit_logits=self.classifier(tokens), count_logits=count_logits, attention=attention)
-        return out
-
-    def read_frames(self, images):
-        """Single images (N, 3, H, W) -> logits (N, 2, 11). Used for the anchor."""
-        return self.read_frames_full(images)["logits"]
-
-    def forward(self, frames, mask):
-        """Sequences (B, T, 3, H, W) with mask (B, T) -> dict.
-
-        logits (B, 2, 11), frame_logits (B, T, 2, 11), and frame_weights (B, T, 2), which
-        is None for the averaged variant. The two-step reader's logits are log-probabilities
-        (compose), and it adds:
-            tokens              (B, 3, D) combined over frames: single, left, right
-            digit_logits        (B, 3, 10)
-            count_logits        (B, 2), the mean of the frames' count logits over real frames
-            frame_count_logits  (B, T, 2)
-            attention           (B, T, 3, C), zero for padded frames
-            all_frame_weights   (B, T, 3) or None; frame_weights keeps left and right
-        """
-        B, T = mask.shape
-        # Run the CNN on the real frames only, so padding never reaches BatchNorm.
-        real, real_count, real_attention = self.read(frames[mask])  # (R, Q, D), R real frames in the batch
-        tokens = real.new_zeros(B, T, *real.shape[1:])  # (B, T, Q, D)
-        tokens[mask] = real
-        count = None
-        if self.reader == "two-step":
-            count = real_count.new_zeros(B, T, 2)
-            count[mask] = real_count
-        frame_logits = self.classify(tokens, count)  # (B, T, 2, 11)
-
-        frame_weights = None  # the averaged variant weighs all real frames equally
-        if self.variant == "averaged":
-            summary = masked_mean(tokens, mask)  # (B, Q, D)
-        else:
-            if self.temporal is not None:
-                tokens = self.temporal(tokens, mask)  # (B, T, Q, D)
-            summary, frame_weights = self.pool(tokens, mask)  # (B, Q, D), (B, T, Q)
-        if self.reader == "fused":
-            return {"logits": self.classify(summary), "frame_logits": frame_logits, "frame_weights": frame_weights}
-
-        attention = real_attention.new_zeros(B, T, *real_attention.shape[1:])
-        attention[mask] = real_attention
-        count_logits = masked_mean(count, mask)  # (B, 2)
-        return {
-            "logits": self.classify(summary, count_logits),
-            "frame_logits": frame_logits,
-            "frame_weights": None if frame_weights is None else frame_weights[..., 1:],
-            "all_frame_weights": frame_weights,
-            "tokens": summary,
-            "digit_logits": self.classifier(summary),
-            "count_logits": count_logits,
-            "frame_count_logits": count,
-            "attention": attention,
-        }
-
-
 def count_prior(numbers):
-    """log(one-digit / two-digit numbers) in numbers: the count offset for a count head trained with both weighed equally.
+    """log(one-digit / two-digit numbers): the count offset for a count head trained with both weighed equally.
 
-    The standard correction for a balanced loss (logit adjustment, Menon et al. 2021): with 4.5%
-    two-digit numbers it is log(0.955 / 0.045) = 3.05. Computed from training numbers only, so
-    nothing is tuned on val or on held-out numbers. 0 if either kind is missing.
+    The count loss weighs one and two digits equally, so the count head answers as if half of all
+    numbers had two digits. Adding this to the "one digit" score corrects that for the real mix
+    (logit adjustment, Menon et al. 2021): with 4.5% two-digit numbers it is log(0.955 / 0.045) =
+    3.05. Computed from training numbers only. 0 if either kind is missing.
     """
     two = sum(len(number) == 2 for number in numbers)
     one = len(numbers) - two
     return math.log(one / two) if one and two else 0.0
 
 
-def load_run(run_dir, device="cpu"):
-    """Rebuild a trained model from run_dir/best.pt: returns (model in eval mode, config, epoch).
+def offset_for_share(two_digit_share):
+    """The count offset for a league where a share two_digit_share of numbers has two digits."""
+    return math.log((1 - two_digit_share) / two_digit_share)
 
-    The count offset comes from the config; runs from before it existed get 0.
+
+# ----- readers -----
+
+class FusedReader(nn.Module):
+    """Two queries (first and second digit) over cells that add deep and local features."""
+
+    positions = (0, 1)  # the queries of digit position 1 and 2
+    attention_grid = CELL_GRID
+
+    def __init__(self, dim, pretrained):
+        super().__init__()
+        rows, columns = CELL_GRID
+        self.token_dim = dim
+        self.backbone = make_backbone(pretrained)
+        self.project = nn.Conv2d(BACKBONE_CHANNELS, dim, kernel_size=1)
+        self.project_local = nn.Conv2d(LOCAL_CHANNELS, dim, kernel_size=1)
+        self.queries = nn.Parameter(torch.randn(1, 2, dim) * 0.02)
+        # A learned position per cell, in the keys only (as in DETR): it decides where a query
+        # looks, but is kept out of what the token carries.
+        self.cell_positions = nn.Parameter(torch.randn(1, rows * columns, dim) * 0.02)
+        self.register_buffer("side_bias", side_bias(rows, columns, FUSED_SIDES, FUSED_WIDTH), persistent=False)
+        self.attention = nn.MultiheadAttention(dim, HEADS, batch_first=True)
+        self.norm = nn.LayerNorm(dim)
+        self.classifier = nn.Linear(dim, NUM_CLASSES)
+        not_allowed = torch.zeros(2, NUM_CLASSES)
+        not_allowed[0, BLANK] = float("-inf")  # every number has a first digit
+        self.register_buffer("not_allowed", not_allowed, persistent=False)
+
+    def forward(self, images):
+        local = self.backbone[:LOCAL_BLOCKS](images)
+        deep = self.backbone[LOCAL_BLOCKS:](local)
+        deep = F.interpolate(self.project(deep), size=local.shape[-2:], mode="bilinear", align_corners=False)
+        cells = (deep + self.project_local(local)).flatten(2).transpose(1, 2)  # (N, C, D)
+        queries = self.queries.expand(len(cells), -1, -1)
+        tokens, attention = self.attention(queries, cells + self.cell_positions, cells, attn_mask=self.side_bias)
+        return self.norm(tokens), attention, None
+
+    def logits(self, tokens, count_logits=None, count_offset=0.0):
+        return (self.classifier(tokens) + self.not_allowed).log_softmax(dim=-1)
+
+    def digit_logits(self, tokens):
+        return None
+
+
+class TwoStepReader(nn.Module):
+    """Single, left and right queries: deep keys choose where, local values give what. See the module docstring."""
+
+    positions = (1, 2)  # left and right are digit position 1 and 2 of a two-digit number
+    attention_grid = CELL_GRID
+
+    def __init__(self, dim, pretrained):
+        super().__init__()
+        rows, columns = CELL_GRID
+        self.token_dim = dim
+        self.backbone = make_backbone(pretrained)
+        self.project_keys = nn.Conv2d(BACKBONE_CHANNELS, dim, kernel_size=1)
+        self.values = LocalHead(VALUE_CHANNELS)
+        self.count_head = nn.Linear(BACKBONE_CHANNELS, 2)
+        self.queries = nn.Parameter(torch.randn(1, 3, dim) * 0.02)
+        self.cell_positions = nn.Parameter(torch.randn(1, rows * columns, dim) * 0.02)
+        self.register_buffer("side_bias", side_bias(rows, columns, TWO_STEP_SIDES, TWO_STEP_WIDTH), persistent=False)
+        # One head, so each query's map is exactly the weights its token is made of.
+        self.attention = nn.MultiheadAttention(dim, 1, batch_first=True, kdim=dim, vdim=VALUE_CHANNELS)
+        self.norm = nn.LayerNorm(dim)
+        self.classifier = nn.Linear(dim, DIGITS)  # shared by single, left and right
+
+    def forward(self, images):
+        local = self.backbone[:LOCAL_BLOCKS](images)
+        deep = self.backbone[LOCAL_BLOCKS:](local)
+        keys = F.interpolate(self.project_keys(deep), size=local.shape[-2:], mode="bilinear", align_corners=False)
+        values = self.values(local)  # local features only
+        queries = self.queries.expand(len(local), -1, -1)
+        tokens, attention = self.attention(queries, keys.flatten(2).transpose(1, 2) + self.cell_positions,
+                                           values.flatten(2).transpose(1, 2), attn_mask=self.side_bias)
+        return self.norm(tokens), attention, self.count_head(deep.mean(dim=(2, 3)))
+
+    def logits(self, tokens, count_logits, count_offset=0.0):
+        """The count offset is added to the "one digit" score here only, never to the count loss."""
+        return compose(self.classifier(tokens), count_logits + count_logits.new_tensor([count_offset, 0.0]))
+
+    def digit_logits(self, tokens):
+        return self.classifier(tokens)
+
+
+class ParseqReader(nn.Module):
+    """PARSeq-Tiny on the stretched number area: digit 1 and digit 2 (or end) per frame. See the module docstring."""
+
+    positions = (0, 1)
+    attention_grid = (parseq.TEXT_SIZE[0] // parseq.PATCH_SIZE[0], parseq.TEXT_SIZE[1] // parseq.PATCH_SIZE[1])
+    token_dim = parseq.EMBED_DIM
+
+    def __init__(self, dim, pretrained):
+        super().__init__()
+        self.backbone = parseq.make_encoder()
+        self.text = parseq.TextDecoder()
+        if pretrained:
+            encoder, decoder = parseq.digit_weights()
+            self.backbone.load_state_dict(encoder)
+            self.text.load_state_dict(decoder)
+        self.rows = (round(PARSEQ_ROWS[0] * IMAGE_SIZE[0]), round(PARSEQ_ROWS[1] * IMAGE_SIZE[0]))
+        self.columns = (round(PARSEQ_COLUMNS[0] * IMAGE_SIZE[1]), round(PARSEQ_COLUMNS[1] * IMAGE_SIZE[1]))
+        self.register_buffer("mean", torch.tensor(IMAGENET_MEAN)[:, None, None], persistent=False)
+        self.register_buffer("std", torch.tensor(IMAGENET_STD)[:, None, None], persistent=False)
+
+    def forward(self, images):
+        lines = parseq.text_lines(images, self.rows, self.columns, self.mean, self.std)
+        features, attention = self.text.read(self.backbone(lines))
+        return features[:, :2], attention[:, :2], None  # digit 1, digit 2 or end
+
+    def logits(self, tokens, count_logits=None, count_offset=0.0):
+        """PARSeq's (end, digits) scores per position -> (..., 2, 11) over (digits, BLANK); end in position 2 is BLANK."""
+        scores = self.text.head(tokens)
+        first = torch.cat([scores[..., 0, 1:].log_softmax(dim=-1), torch.full_like(scores[..., 0, :1], float("-inf"))], dim=-1)
+        second = torch.cat([scores[..., 1, 1:], scores[..., 1, :1]], dim=-1).log_softmax(dim=-1)
+        return torch.stack([first, second], dim=-2)
+
+    def digit_logits(self, tokens):
+        return None
+
+
+READERS = {"fused": FusedReader, "two-step": TwoStepReader, "parseq": ParseqReader}
+
+
+# ----- frame combiners -----
+
+def masked_mean(values, mask):
+    """Mean over the real frames: (B, T, ...) -> (B, ...)."""
+    weights = mask.reshape(*mask.shape, *[1] * (values.dim() - 2)).float()
+    return (values * weights).sum(dim=1) / weights.sum(dim=1)
+
+
+class FrameMean(nn.Module):
+    """Plain mean over the real frames."""
+
+    def __init__(self, dim, max_frames, dropout):
+        super().__init__()
+
+    def forward(self, tokens, mask):
+        return masked_mean(tokens, mask), None
+
+
+class FramePool(nn.Module):
+    """Weighted mean over the real frames, with a learned score per frame and query (Ilse et al. 2018)."""
+
+    def __init__(self, dim, max_frames=MAX_FRAMES, dropout=0.0):
+        super().__init__()
+        self.score = nn.Sequential(nn.Linear(dim, dim // 2), nn.Tanh(), nn.Linear(dim // 2, 1))
+
+    def forward(self, tokens, mask):
+        scores = self.score(tokens).squeeze(-1).masked_fill(~mask[:, :, None], float("-inf"))  # (B, T, Q)
+        weights = scores.softmax(dim=1)
+        return (weights[..., None] * tokens).sum(dim=1), weights
+
+
+class FrameTransformer(nn.Module):
+    """One transformer layer: each frame's token sees the same query in the other frames, then pooling."""
+
+    def __init__(self, dim, max_frames, dropout):
+        super().__init__()
+        self.frame_positions = nn.Parameter(torch.randn(1, max_frames, dim) * 0.02)  # frame order
+        self.layer = nn.TransformerEncoderLayer(dim, HEADS, dim_feedforward=2 * dim, dropout=dropout,
+                                                batch_first=True, norm_first=True)
+        self.norm = nn.LayerNorm(dim)  # a pre-norm layer leaves its output unnormalised
+        self.pool = FramePool(dim)
+
+    def forward(self, tokens, mask):
+        B, T, Q, D = tokens.shape
+        x = tokens.transpose(1, 2).reshape(B * Q, T, D) + self.frame_positions[:, :T]  # each query its own sequence
+        x = self.norm(self.layer(x, src_key_padding_mask=(~mask).repeat_interleave(Q, dim=0)))
+        return self.pool(x.reshape(B, Q, T, D).transpose(1, 2), mask)
+
+
+TEMPORAL = {"mean": FrameMean, "pool": FramePool, "transformer": FrameTransformer}
+
+
+# ----- the pipeline -----
+
+class JerseyModel(nn.Module):
+    """Backbone -> reader -> frame combiner -> (2, 11) log-probabilities. See the module docstring.
+
+    count_offset is added to the two-step reader's "one digit" score (see count_prior). It is not a
+    weight: train.py saves it in config.json and load_run restores it.
     """
+
+    def __init__(self, reader="two-step", temporal="mean", dim=128, max_frames=MAX_FRAMES, pretrained=True,
+                 dropout=0.1, count_offset=0.0):
+        super().__init__()
+        if reader not in READERS or temporal not in TEMPORAL:
+            raise ValueError(f"unknown reader {reader!r} or temporal {temporal!r}")
+        if IMAGE_SIZE[0] % BACKBONE_STRIDE or IMAGE_SIZE[1] % BACKBONE_STRIDE:
+            raise ValueError(f"IMAGE_SIZE {IMAGE_SIZE} must be divisible by {BACKBONE_STRIDE}")
+        self.reader_name, self.temporal_name, self.count_offset = reader, temporal, count_offset
+        self.freeze_batchnorm = pretrained  # keep the pretrained BatchNorm statistics fixed
+        self.reader = READERS[reader](dim, pretrained)
+        self.frames = TEMPORAL[temporal](self.reader.token_dim, max_frames, dropout)
+        self.positions = self.reader.positions
+        self.train()
+
+    def train(self, mode=True):
+        """Switch train/eval mode, but keep the backbone's BatchNorm statistics fixed if pretrained."""
+        super().train(mode)
+        if self.freeze_batchnorm:
+            for layer in self.reader.backbone.modules():
+                if isinstance(layer, nn.BatchNorm2d):
+                    layer.eval()
+        return self
+
+    def _encode(self, images):
+        return self.reader(images)
+
+    def _outputs(self, tokens, count_logits):
+        return {"logits": self.reader.logits(tokens, count_logits, self.count_offset),
+                "digit_logits": self.reader.digit_logits(tokens), "count_logits": count_logits}
+
+    def read(self, images):
+        """Single images (N, 3, H, W), e.g. the anchor -> dict: logits (N, 2, 11), digit_logits, count_logits, attention."""
+        tokens, attention, count_logits = self._encode(images)
+        return {**self._outputs(tokens, count_logits), "attention": attention}
+
+    def forward(self, frames, mask):
+        """Sequences (B, T, 3, H, W) with mask (B, T) -> dict.
+
+        logits (B, 2, 11), frame_logits (B, T, 2, 11), frame_weights (B, T, Q) or None (mean),
+        attention (B, T, Q, C), and for the two-step reader digit_logits (B, 3, 10), count_logits
+        (B, 2), the mean of the frames' count logits, and frame_count_logits (B, T, 2); else None.
+        """
+        tokens, attention, count = (_scatter(part, mask) for part in self._encode(frames[mask]))  # real frames only
+        summary, weights = self.frames(tokens, mask)
+        out = self._outputs(summary, None if count is None else masked_mean(count, mask))
+        out.update(frame_logits=self.reader.logits(tokens, count, self.count_offset), frame_weights=weights,
+                   attention=attention, frame_count_logits=count)
+        return out
+
+
+def _scatter(values, mask):
+    """Values of the real frames (R, ...) -> (B, T, ...), zero for padding; None stays None."""
+    if values is None:
+        return None
+    out = values.new_zeros(*mask.shape, *values.shape[1:])
+    out[mask] = values
+    return out
+
+
+def build_model(config, pretrained=False):
+    """The model a run's config describes."""
+    return JerseyModel(config["reader"], config["temporal"], max_frames=config["max_frames"], pretrained=pretrained,
+                       count_offset=config.get("count_offset", 0.0))
+
+
+def load_run(run_dir, device="cpu"):
+    """Rebuild a trained model from run_dir/best.pt: returns (model in eval mode, config, epoch)."""
     checkpoint = torch.load(Path(run_dir) / "best.pt", map_location="cpu")
-    config = checkpoint["config"]
-    # No download: the trained weights replace the pretrained ones.
-    model = JerseyModel(config["variant"], max_frames=config["max_frames"], pretrained=False,
-                        reader=config.get("reader", "fused"))
+    model = build_model(checkpoint["config"])
     model.load_state_dict(checkpoint["model"])
-    model.count_offset = config.get("count_offset", 0.0)
-    return model.to(device).eval(), config, checkpoint["epoch"]
+    return model.to(device).eval(), checkpoint["config"], checkpoint["epoch"]
 
 
 def predict_digits(logits):
-    """Logits (..., 2, 11) -> digits (..., 2) and one confidence per number (...).
+    """Log-probabilities (..., 2, 11) -> digits (..., 2) and one confidence per number (...).
 
-    The two positions are scored independently, so the most likely digit at each
-    position gives the most likely number, and its confidence is their product.
+    The two positions are scored independently, so the most likely digit at each position gives
+    the most likely number, and its confidence is their product.
     """
     probabilities, digits = logits.softmax(dim=-1).max(dim=-1)
     return digits, probabilities.prod(dim=-1)

@@ -1,0 +1,28 @@
+{
+  "approach": "parseq_gate",
+  "reader": "parseq",
+  "temporal": "pool",
+  "max_frames": 10,
+  "exclude": [],
+  "linked_dropped": [],
+  "seed": 0,
+  "count_offset": 0.0,
+  "data": "data",
+  "device": "mps",
+  "parameters": 6000012,
+  "torch": "2.15.0",
+  "stage": {
+    "epochs": 15,
+    "lr": 0.0001,
+    "backbone_lr": 1e-05,
+    "pair_share": 0.0,
+    "single_share": 0.0,
+    "real_pairs": true,
+    "selected_by": "val_loss",
+    "highest": false
+  },
+  "sequences": {
+    "train": 4110,
+    "val": 856
+  }
+}

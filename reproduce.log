@@ -1,0 +1,474 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.7, pytest-9.2.0, pluggy-1.7.0
+rootdir: /Users/alexandreplomp/Downloads/trackbox_case
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.16.0
+collected 45 items
+
+tests/test_parts.py .......................................              [ 86%]
+tests/test_pipeline.py ......                                            [100%]
+
+=============================== warnings summary ===============================
+tests/test_parts.py: 56 warnings
+tests/test_pipeline.py: 32 warnings
+  /Users/alexandreplomp/Downloads/trackbox_case/.venv/lib/python3.12/site-packages/torchvision/io/image.py:33: DeprecationWarning: The image decoding and encoding capabilities of TorchVision are deprecated since torchvision 0.29 and will be removed in a future release. They are superseded by the more complete decoders and encoders of TorchCodec (from torchcodec 0.16). Please see https://meta-pytorch.org/torchcodec/0.16/generated_examples/migration/torchvision_migration.html on how to migrate your code.
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================= 45 passed, 88 warnings in 101.20s (0:01:41) ==================
+{'missing_anchor': 0, 'no_frames': 0, 'players_in_multiple_numbers': 10, 'shared_anchors': 1, 'conflicting_frames': 3, 'shared_between_players': 3579, 'anchor_frame_links': 1}
+players/sequences per split
+number       train         val        test
+     4     554/715     118/153     118/161
+     6     508/618     109/121     109/128
+     8   1118/1436     239/318     239/303
+     9    800/1071     171/209     171/219
+    48       13/13         3/3         3/3
+    49       66/89       14/16       14/16
+    64         2/2         1/2         1/1
+    66      79/102       17/22       17/21
+    88         1/1         1/1         1/1
+    89       42/63        9/11        9/13
+check: no player is in two splits
+held out ['49']; dropped 2 linked train sequences
+locator epoch  1/20  val loss 1.347  val image accuracy 0.401
+locator epoch  2/20  val loss 1.055  val image accuracy 0.524
+locator epoch  3/20  val loss 0.781  val image accuracy 0.698
+locator epoch  4/20  val loss 0.649  val image accuracy 0.762
+locator epoch  5/20  val loss 0.572  val image accuracy 0.788
+locator epoch  6/20  val loss 0.534  val image accuracy 0.805
+locator epoch  7/20  val loss 0.518  val image accuracy 0.804
+locator epoch  8/20  val loss 0.477  val image accuracy 0.817
+locator epoch  9/20  val loss 0.486  val image accuracy 0.813
+locator epoch 10/20  val loss 0.462  val image accuracy 0.828
+locator epoch 11/20  val loss 0.432  val image accuracy 0.833
+locator epoch 12/20  val loss 0.431  val image accuracy 0.836
+locator epoch 13/20  val loss 0.400  val image accuracy 0.848
+locator epoch 14/20  val loss 0.453  val image accuracy 0.822
+locator epoch 15/20  val loss 0.398  val image accuracy 0.853
+locator epoch 16/20  val loss 0.399  val image accuracy 0.848
+locator epoch 17/20  val loss 0.395  val image accuracy 0.850
+locator epoch 18/20  val loss 0.386  val image accuracy 0.856
+locator epoch 19/20  val loss 0.391  val image accuracy 0.853
+locator epoch 20/20  val loss 0.390  val image accuracy 0.852
+check: locator val image accuracy 0.856 (gate 0.75)
+boxes in results/boxes/ex49: count how many of the boxes on strips.png sit on the digit
+run results/runs/single_frame_ex49: 362,916 parameters on mps, count offset 3.05
+stage1 epoch 0  val loss 1.414 (uniform guess 2.350)
+stage1 epoch  1/40  train loss 1.526  val loss 0.824 acc 0.375 two-digit 0.000  pairs 0.000  20s  *
+stage1 epoch  2/40  train loss 1.204  val loss 0.674 acc 0.530 two-digit 0.000  pairs 0.000  17s
+stage1 epoch  3/40  train loss 0.959  val loss 0.546 acc 0.632 two-digit 0.000  pairs 0.067  18s  *
+stage1 epoch  4/40  train loss 0.874  val loss 0.476 acc 0.700 two-digit 0.000  pairs 0.280  18s  *
+stage1 epoch  5/40  train loss 0.806  val loss 0.458 acc 0.732 two-digit 0.000  pairs 0.477  19s  *
+stage1 epoch  6/40  train loss 0.779  val loss 0.474 acc 0.733 two-digit 0.000  pairs 0.587  18s  *
+stage1 epoch  7/40  train loss 0.708  val loss 0.437 acc 0.733 two-digit 0.000  pairs 0.660  17s  *
+stage1 epoch  8/40  train loss 0.628  val loss 0.421 acc 0.751 two-digit 0.000  pairs 0.703  17s  *
+stage1 epoch  9/40  train loss 0.619  val loss 0.419 acc 0.757 two-digit 0.000  pairs 0.683  14s
+stage1 epoch 10/40  train loss 0.571  val loss 0.407 acc 0.767 two-digit 0.000  pairs 0.747  9s  *
+stage1 epoch 11/40  train loss 0.546  val loss 0.442 acc 0.735 two-digit 0.000  pairs 0.653  10s
+stage1 epoch 12/40  train loss 0.554  val loss 0.416 acc 0.763 two-digit 0.000  pairs 0.727  9s
+stage1 epoch 13/40  train loss 0.538  val loss 0.405 acc 0.781 two-digit 0.000  pairs 0.733  10s
+stage1 epoch 14/40  train loss 0.507  val loss 0.406 acc 0.765 two-digit 0.000  pairs 0.753  9s  *
+stage1 epoch 15/40  train loss 0.495  val loss 0.383 acc 0.786 two-digit 0.026  pairs 0.767  10s  *
+stage1 epoch 16/40  train loss 0.490  val loss 0.387 acc 0.779 two-digit 0.026  pairs 0.760  11s
+stage1 epoch 17/40  train loss 0.494  val loss 0.381 acc 0.796 two-digit 0.051  pairs 0.800  18s  *
+stage1 epoch 18/40  train loss 0.488  val loss 0.391 acc 0.779 two-digit 0.000  pairs 0.777  19s
+stage1 epoch 19/40  train loss 0.466  val loss 0.380 acc 0.787 two-digit 0.026  pairs 0.807  13s  *
+stage1 epoch 20/40  train loss 0.457  val loss 0.363 acc 0.795 two-digit 0.077  pairs 0.780  9s
+stage1 epoch 21/40  train loss 0.454  val loss 0.373 acc 0.789 two-digit 0.026  pairs 0.800  12s
+stage1 epoch 22/40  train loss 0.471  val loss 0.364 acc 0.798 two-digit 0.000  pairs 0.790  9s
+stage1 epoch 23/40  train loss 0.455  val loss 0.396 acc 0.775 two-digit 0.026  pairs 0.773  12s
+stage1 epoch 24/40  train loss 0.448  val loss 0.363 acc 0.799 two-digit 0.026  pairs 0.800  18s
+stage1 epoch 25/40  train loss 0.448  val loss 0.372 acc 0.802 two-digit 0.000  pairs 0.787  11s
+stage1 epoch 26/40  train loss 0.433  val loss 0.353 acc 0.806 two-digit 0.026  pairs 0.823  10s  *
+stage1 epoch 27/40  train loss 0.437  val loss 0.355 acc 0.808 two-digit 0.051  pairs 0.810  9s
+stage1 epoch 28/40  train loss 0.426  val loss 0.351 acc 0.814 two-digit 0.051  pairs 0.827  10s  *
+stage1 epoch 29/40  train loss 0.413  val loss 0.358 acc 0.810 two-digit 0.051  pairs 0.833  9s  *
+stage1 epoch 30/40  train loss 0.410  val loss 0.355 acc 0.806 two-digit 0.026  pairs 0.840  10s  *
+stage1 epoch 31/40  train loss 0.406  val loss 0.355 acc 0.821 two-digit 0.026  pairs 0.810  9s
+stage1 epoch 32/40  train loss 0.421  val loss 0.348 acc 0.814 two-digit 0.051  pairs 0.837  9s
+stage1 epoch 33/40  train loss 0.410  val loss 0.357 acc 0.810 two-digit 0.051  pairs 0.837  9s
+stage1 epoch 34/40  train loss 0.414  val loss 0.349 acc 0.818 two-digit 0.026  pairs 0.827  9s
+stage1 epoch 35/40  train loss 0.412  val loss 0.349 acc 0.825 two-digit 0.051  pairs 0.837  9s
+stage1 epoch 36/40  train loss 0.399  val loss 0.349 acc 0.821 two-digit 0.051  pairs 0.840  9s
+stage1 epoch 37/40  train loss 0.411  val loss 0.351 acc 0.817 two-digit 0.051  pairs 0.840  9s
+stage1 epoch 38/40  train loss 0.420  val loss 0.348 acc 0.820 two-digit 0.051  pairs 0.840  9s
+stage1 epoch 39/40  train loss 0.416  val loss 0.349 acc 0.815 two-digit 0.051  pairs 0.843  9s  *
+stage1 epoch 40/40  train loss 0.403  val loss 0.349 acc 0.814 two-digit 0.051  pairs 0.843  10s
+stage1: best epoch 39 by pair_accuracy 0.843
+single_frame_ex49 epoch 0  val loss 0.349 (uniform guess 2.350)
+single_frame_ex49 epoch  1/20  train loss 0.787  val loss 0.338 acc 0.817 two-digit 0.128  pairs 0.830  11s  *
+single_frame_ex49 epoch  2/20  train loss 0.673  val loss 0.326 acc 0.813 two-digit 0.154  pairs 0.837  10s  *
+single_frame_ex49 epoch  3/20  train loss 0.632  val loss 0.317 acc 0.806 two-digit 0.128  pairs 0.827  10s  *
+single_frame_ex49 epoch  4/20  train loss 0.637  val loss 0.309 acc 0.810 two-digit 0.128  pairs 0.823  10s  *
+single_frame_ex49 epoch  5/20  train loss 0.625  val loss 0.301 acc 0.805 two-digit 0.128  pairs 0.817  11s  *
+single_frame_ex49 epoch  6/20  train loss 0.631  val loss 0.290 acc 0.813 two-digit 0.154  pairs 0.803  10s  *
+single_frame_ex49 epoch  7/20  train loss 0.624  val loss 0.292 acc 0.814 two-digit 0.179  pairs 0.813  10s
+single_frame_ex49 epoch  8/20  train loss 0.606  val loss 0.288 acc 0.811 two-digit 0.154  pairs 0.810  10s  *
+single_frame_ex49 epoch  9/20  train loss 0.606  val loss 0.283 acc 0.818 two-digit 0.179  pairs 0.817  10s  *
+single_frame_ex49 epoch 10/20  train loss 0.582  val loss 0.285 acc 0.812 two-digit 0.205  pairs 0.817  10s
+single_frame_ex49 epoch 11/20  train loss 0.594  val loss 0.276 acc 0.823 two-digit 0.231  pairs 0.810  10s  *
+single_frame_ex49 epoch 12/20  train loss 0.586  val loss 0.277 acc 0.820 two-digit 0.231  pairs 0.810  10s
+single_frame_ex49 epoch 13/20  train loss 0.611  val loss 0.280 acc 0.815 two-digit 0.205  pairs 0.807  11s
+single_frame_ex49 epoch 14/20  train loss 0.582  val loss 0.277 acc 0.812 two-digit 0.205  pairs 0.810  10s
+single_frame_ex49 epoch 15/20  train loss 0.590  val loss 0.275 acc 0.819 two-digit 0.231  pairs 0.793  10s  *
+single_frame_ex49 epoch 16/20  train loss 0.608  val loss 0.274 acc 0.815 two-digit 0.205  pairs 0.807  10s  *
+single_frame_ex49 epoch 17/20  train loss 0.581  val loss 0.274 acc 0.813 two-digit 0.231  pairs 0.807  10s  *
+single_frame_ex49 epoch 18/20  train loss 0.547  val loss 0.274 acc 0.815 two-digit 0.205  pairs 0.810  10s  *
+single_frame_ex49 epoch 19/20  train loss 0.610  val loss 0.274 acc 0.815 two-digit 0.205  pairs 0.807  10s
+single_frame_ex49 epoch 20/20  train loss 0.568  val loss 0.274 acc 0.815 two-digit 0.205  pairs 0.803  10s
+single_frame_ex49: best epoch 18 by val_loss 0.274
+held out ['49']; dropped 2 linked train sequences
+run results/runs/fused_ex49: 304,835 parameters on mps, count offset 0.00
+fused_ex49 epoch 0  val loss 2.436 (uniform guess 2.350)
+fused_ex49 epoch  1/30  train loss 1.627  val loss 0.964 acc 0.214 two-digit 0.000  pairs 0.000  57s  *
+fused_ex49 epoch  2/30  train loss 0.981  val loss 0.781 acc 0.314 two-digit 0.205  pairs 0.000  45s  *
+fused_ex49 epoch  3/30  train loss 0.849  val loss 0.645 acc 0.432 two-digit 0.564  pairs 0.000  42s  *
+fused_ex49 epoch  4/30  train loss 0.719  val loss 0.569 acc 0.517 two-digit 0.538  pairs 0.000  34s  *
+fused_ex49 epoch  5/30  train loss 0.595  val loss 0.457 acc 0.630 two-digit 0.667  pairs 0.013  31s  *
+fused_ex49 epoch  6/30  train loss 0.498  val loss 0.409 acc 0.681 two-digit 0.718  pairs 0.030  34s  *
+fused_ex49 epoch  7/30  train loss 0.420  val loss 0.377 acc 0.714 two-digit 0.744  pairs 0.027  35s  *
+fused_ex49 epoch  8/30  train loss 0.387  val loss 0.348 acc 0.763 two-digit 0.846  pairs 0.033  36s  *
+fused_ex49 epoch  9/30  train loss 0.337  val loss 0.329 acc 0.758 two-digit 0.795  pairs 0.020  32s  *
+fused_ex49 epoch 10/30  train loss 0.309  val loss 0.290 acc 0.785 two-digit 0.846  pairs 0.013  31s  *
+fused_ex49 epoch 11/30  train loss 0.289  val loss 0.269 acc 0.817 two-digit 0.769  pairs 0.017  34s  *
+fused_ex49 epoch 12/30  train loss 0.282  val loss 0.271 acc 0.820 two-digit 0.897  pairs 0.023  32s
+fused_ex49 epoch 13/30  train loss 0.273  val loss 0.262 acc 0.815 two-digit 0.846  pairs 0.023  32s  *
+fused_ex49 epoch 14/30  train loss 0.239  val loss 0.245 acc 0.826 two-digit 0.872  pairs 0.017  35s  *
+fused_ex49 epoch 15/30  train loss 0.243  val loss 0.252 acc 0.823 two-digit 0.897  pairs 0.013  31s
+fused_ex49 epoch 16/30  train loss 0.233  val loss 0.284 acc 0.768 two-digit 0.846  pairs 0.030  29s
+fused_ex49 epoch 17/30  train loss 0.224  val loss 0.233 acc 0.837 two-digit 0.872  pairs 0.023  30s  *
+fused_ex49 epoch 18/30  train loss 0.214  val loss 0.222 acc 0.849 two-digit 0.846  pairs 0.017  30s  *
+fused_ex49 epoch 19/30  train loss 0.217  val loss 0.215 acc 0.855 two-digit 0.846  pairs 0.020  30s  *
+fused_ex49 epoch 20/30  train loss 0.202  val loss 0.219 acc 0.849 two-digit 0.846  pairs 0.023  32s
+fused_ex49 epoch 21/30  train loss 0.202  val loss 0.218 acc 0.858 two-digit 0.897  pairs 0.020  37s
+fused_ex49 epoch 22/30  train loss 0.205  val loss 0.213 acc 0.860 two-digit 0.897  pairs 0.020  29s  *
+fused_ex49 epoch 23/30  train loss 0.194  val loss 0.206 acc 0.865 two-digit 0.872  pairs 0.017  29s  *
+fused_ex49 epoch 24/30  train loss 0.200  val loss 0.210 acc 0.861 two-digit 0.872  pairs 0.020  31s
+fused_ex49 epoch 25/30  train loss 0.194  val loss 0.218 acc 0.856 two-digit 0.897  pairs 0.023  31s
+fused_ex49 epoch 26/30  train loss 0.200  val loss 0.202 acc 0.867 two-digit 0.872  pairs 0.023  31s  *
+fused_ex49 epoch 27/30  train loss 0.186  val loss 0.206 acc 0.871 two-digit 0.872  pairs 0.023  36s
+fused_ex49 epoch 28/30  train loss 0.194  val loss 0.205 acc 0.871 two-digit 0.872  pairs 0.020  29s
+fused_ex49 epoch 29/30  train loss 0.195  val loss 0.206 acc 0.871 two-digit 0.872  pairs 0.023  28s
+fused_ex49 epoch 30/30  train loss 0.185  val loss 0.206 acc 0.871 two-digit 0.872  pairs 0.023  31s
+fused_ex49: best epoch 26 by val_loss 0.202
+held out ['49']; dropped 2 linked train sequences
+run results/runs/two_step_mean_ex49: 362,916 parameters on mps, count offset 3.05
+stage1 epoch 0  val loss 1.243 (uniform guess 2.350)
+stage1 epoch  1/40  train loss 1.507  val loss 0.827 acc 0.380 two-digit 0.000  pairs 0.000  62s  *
+stage1 epoch  2/40  train loss 1.211  val loss 0.580 acc 0.614 two-digit 0.000  pairs 0.000  39s
+stage1 epoch  3/40  train loss 0.871  val loss 0.363 acc 0.811 two-digit 0.000  pairs 0.153  25s  *
+stage1 epoch  4/40  train loss 0.742  val loss 0.335 acc 0.815 two-digit 0.000  pairs 0.437  34s  *
+stage1 epoch  5/40  train loss 0.621  val loss 0.325 acc 0.842 two-digit 0.000  pairs 0.600  34s  *
+stage1 epoch  6/40  train loss 0.516  val loss 0.284 acc 0.860 two-digit 0.000  pairs 0.660  34s  *
+stage1 epoch  7/40  train loss 0.458  val loss 0.267 acc 0.880 two-digit 0.000  pairs 0.663  27s  *
+stage1 epoch  8/40  train loss 0.429  val loss 0.262 acc 0.875 two-digit 0.026  pairs 0.730  34s  *
+stage1 epoch  9/40  train loss 0.386  val loss 0.246 acc 0.887 two-digit 0.000  pairs 0.707  29s
+stage1 epoch 10/40  train loss 0.376  val loss 0.258 acc 0.890 two-digit 0.000  pairs 0.713  30s
+stage1 epoch 11/40  train loss 0.357  val loss 0.238 acc 0.888 two-digit 0.026  pairs 0.740  28s  *
+stage1 epoch 12/40  train loss 0.336  val loss 0.239 acc 0.888 two-digit 0.026  pairs 0.737  30s
+stage1 epoch 13/40  train loss 0.336  val loss 0.232 acc 0.883 two-digit 0.051  pairs 0.763  29s  *
+stage1 epoch 14/40  train loss 0.316  val loss 0.246 acc 0.889 two-digit 0.026  pairs 0.780  26s  *
+stage1 epoch 15/40  train loss 0.308  val loss 0.234 acc 0.895 two-digit 0.026  pairs 0.770  31s
+stage1 epoch 16/40  train loss 0.298  val loss 0.222 acc 0.902 two-digit 0.051  pairs 0.777  25s
+stage1 epoch 17/40  train loss 0.283  val loss 0.214 acc 0.906 two-digit 0.077  pairs 0.777  26s
+stage1 epoch 18/40  train loss 0.278  val loss 0.272 acc 0.880 two-digit 0.026  pairs 0.760  25s
+stage1 epoch 19/40  train loss 0.263  val loss 0.244 acc 0.892 two-digit 0.026  pairs 0.770  33s
+stage1 epoch 20/40  train loss 0.276  val loss 0.220 acc 0.905 two-digit 0.077  pairs 0.797  27s  *
+stage1 epoch 21/40  train loss 0.273  val loss 0.223 acc 0.892 two-digit 0.077  pairs 0.790  25s
+stage1 epoch 22/40  train loss 0.269  val loss 0.228 acc 0.892 two-digit 0.051  pairs 0.793  26s
+stage1 epoch 23/40  train loss 0.259  val loss 0.229 acc 0.906 two-digit 0.051  pairs 0.800  26s  *
+stage1 epoch 24/40  train loss 0.257  val loss 0.214 acc 0.907 two-digit 0.103  pairs 0.770  26s
+stage1 epoch 25/40  train loss 0.254  val loss 0.228 acc 0.901 two-digit 0.051  pairs 0.813  25s  *
+stage1 epoch 26/40  train loss 0.230  val loss 0.215 acc 0.908 two-digit 0.103  pairs 0.800  25s
+stage1 epoch 27/40  train loss 0.230  val loss 0.218 acc 0.911 two-digit 0.103  pairs 0.797  27s
+stage1 epoch 28/40  train loss 0.228  val loss 0.227 acc 0.907 two-digit 0.128  pairs 0.803  27s
+stage1 epoch 29/40  train loss 0.238  val loss 0.215 acc 0.911 two-digit 0.103  pairs 0.810  26s
+stage1 epoch 30/40  train loss 0.223  val loss 0.214 acc 0.908 two-digit 0.103  pairs 0.800  25s
+stage1 epoch 31/40  train loss 0.225  val loss 0.204 acc 0.917 two-digit 0.128  pairs 0.827  28s  *
+stage1 epoch 32/40  train loss 0.216  val loss 0.205 acc 0.919 two-digit 0.128  pairs 0.817  26s
+stage1 epoch 33/40  train loss 0.237  val loss 0.207 acc 0.915 two-digit 0.128  pairs 0.810  27s
+stage1 epoch 34/40  train loss 0.211  val loss 0.209 acc 0.911 two-digit 0.103  pairs 0.813  27s
+stage1 epoch 35/40  train loss 0.238  val loss 0.214 acc 0.911 two-digit 0.077  pairs 0.807  25s
+stage1 epoch 36/40  train loss 0.216  val loss 0.211 acc 0.911 two-digit 0.103  pairs 0.817  25s
+stage1 epoch 37/40  train loss 0.232  val loss 0.211 acc 0.908 two-digit 0.103  pairs 0.813  27s
+stage1 epoch 38/40  train loss 0.223  val loss 0.211 acc 0.908 two-digit 0.103  pairs 0.817  27s
+stage1 epoch 39/40  train loss 0.225  val loss 0.212 acc 0.910 two-digit 0.103  pairs 0.817  25s
+stage1 epoch 40/40  train loss 0.208  val loss 0.211 acc 0.908 two-digit 0.103  pairs 0.817  25s
+stage1: best epoch 31 by pair_accuracy 0.827
+two_step_mean_ex49 epoch 0  val loss 0.204 (uniform guess 2.350)
+two_step_mean_ex49 epoch  1/20  train loss 0.614  val loss 0.186 acc 0.911 two-digit 0.179  pairs 0.837  42s  *
+two_step_mean_ex49 epoch  2/20  train loss 0.482  val loss 0.167 acc 0.914 two-digit 0.231  pairs 0.843  38s  *
+two_step_mean_ex49 epoch  3/20  train loss 0.460  val loss 0.161 acc 0.912 two-digit 0.333  pairs 0.837  40s  *
+two_step_mean_ex49 epoch  4/20  train loss 0.457  val loss 0.155 acc 0.917 two-digit 0.333  pairs 0.837  31s  *
+two_step_mean_ex49 epoch  5/20  train loss 0.437  val loss 0.146 acc 0.923 two-digit 0.385  pairs 0.840  29s  *
+two_step_mean_ex49 epoch  6/20  train loss 0.418  val loss 0.143 acc 0.915 two-digit 0.359  pairs 0.837  35s  *
+two_step_mean_ex49 epoch  7/20  train loss 0.424  val loss 0.137 acc 0.925 two-digit 0.436  pairs 0.837  34s  *
+two_step_mean_ex49 epoch  8/20  train loss 0.393  val loss 0.133 acc 0.925 two-digit 0.487  pairs 0.833  28s  *
+two_step_mean_ex49 epoch  9/20  train loss 0.382  val loss 0.132 acc 0.926 two-digit 0.513  pairs 0.823  31s  *
+two_step_mean_ex49 epoch 10/20  train loss 0.390  val loss 0.131 acc 0.927 two-digit 0.538  pairs 0.810  38s  *
+two_step_mean_ex49 epoch 11/20  train loss 0.392  val loss 0.127 acc 0.927 two-digit 0.564  pairs 0.823  30s  *
+two_step_mean_ex49 epoch 12/20  train loss 0.361  val loss 0.126 acc 0.926 two-digit 0.538  pairs 0.813  32s  *
+two_step_mean_ex49 epoch 13/20  train loss 0.402  val loss 0.127 acc 0.930 two-digit 0.590  pairs 0.820  28s
+two_step_mean_ex49 epoch 14/20  train loss 0.370  val loss 0.124 acc 0.929 two-digit 0.590  pairs 0.817  32s  *
+two_step_mean_ex49 epoch 15/20  train loss 0.380  val loss 0.125 acc 0.930 two-digit 0.590  pairs 0.813  33s
+two_step_mean_ex49 epoch 16/20  train loss 0.367  val loss 0.124 acc 0.931 two-digit 0.590  pairs 0.797  31s  *
+two_step_mean_ex49 epoch 17/20  train loss 0.369  val loss 0.123 acc 0.931 two-digit 0.590  pairs 0.797  32s  *
+two_step_mean_ex49 epoch 18/20  train loss 0.360  val loss 0.124 acc 0.931 two-digit 0.590  pairs 0.803  32s
+two_step_mean_ex49 epoch 19/20  train loss 0.385  val loss 0.123 acc 0.932 two-digit 0.590  pairs 0.800  34s  *
+two_step_mean_ex49 epoch 20/20  train loss 0.373  val loss 0.123 acc 0.932 two-digit 0.590  pairs 0.797  32s  *
+two_step_mean_ex49: best epoch 20 by val_loss 0.123
+held out ['49']; dropped 2 linked train sequences
+run results/runs/two_step_pool_ex49: 371,237 parameters on mps, count offset 3.05
+stage1 epoch 0  val loss 1.242 (uniform guess 2.350)
+stage1 epoch  1/40  train loss 1.524  val loss 0.831 acc 0.379 two-digit 0.000  pairs 0.000  59s  *
+stage1 epoch  2/40  train loss 1.201  val loss 0.575 acc 0.621 two-digit 0.000  pairs 0.000  50s
+stage1 epoch  3/40  train loss 0.862  val loss 0.362 acc 0.813 two-digit 0.000  pairs 0.117  34s  *
+stage1 epoch  4/40  train loss 0.744  val loss 0.327 acc 0.821 two-digit 0.000  pairs 0.423  33s  *
+stage1 epoch  5/40  train loss 0.640  val loss 0.285 acc 0.862 two-digit 0.000  pairs 0.597  34s  *
+stage1 epoch  6/40  train loss 0.520  val loss 0.281 acc 0.857 two-digit 0.000  pairs 0.660  28s  *
+stage1 epoch  7/40  train loss 0.444  val loss 0.289 acc 0.864 two-digit 0.000  pairs 0.647  27s
+stage1 epoch  8/40  train loss 0.406  val loss 0.255 acc 0.888 two-digit 0.000  pairs 0.700  26s  *
+stage1 epoch  9/40  train loss 0.393  val loss 0.264 acc 0.880 two-digit 0.000  pairs 0.703  28s  *
+stage1 epoch 10/40  train loss 0.371  val loss 0.229 acc 0.899 two-digit 0.026  pairs 0.750  31s  *
+stage1 epoch 11/40  train loss 0.349  val loss 0.237 acc 0.894 two-digit 0.026  pairs 0.743  30s
+stage1 epoch 12/40  train loss 0.339  val loss 0.257 acc 0.881 two-digit 0.051  pairs 0.737  27s
+stage1 epoch 13/40  train loss 0.307  val loss 0.270 acc 0.874 two-digit 0.026  pairs 0.773  27s  *
+stage1 epoch 14/40  train loss 0.316  val loss 0.224 acc 0.898 two-digit 0.103  pairs 0.780  26s  *
+stage1 epoch 15/40  train loss 0.323  val loss 0.223 acc 0.898 two-digit 0.051  pairs 0.787  25s  *
+stage1 epoch 16/40  train loss 0.291  val loss 0.224 acc 0.894 two-digit 0.103  pairs 0.780  27s
+stage1 epoch 17/40  train loss 0.295  val loss 0.215 acc 0.912 two-digit 0.103  pairs 0.770  30s
+stage1 epoch 18/40  train loss 0.299  val loss 0.236 acc 0.887 two-digit 0.051  pairs 0.783  25s
+stage1 epoch 19/40  train loss 0.260  val loss 0.225 acc 0.900 two-digit 0.051  pairs 0.793  25s  *
+stage1 epoch 20/40  train loss 0.266  val loss 0.211 acc 0.902 two-digit 0.077  pairs 0.820  25s  *
+stage1 epoch 21/40  train loss 0.269  val loss 0.194 acc 0.927 two-digit 0.128  pairs 0.797  27s
+stage1 epoch 22/40  train loss 0.252  val loss 0.196 acc 0.912 two-digit 0.103  pairs 0.810  26s
+stage1 epoch 23/40  train loss 0.248  val loss 0.202 acc 0.921 two-digit 0.103  pairs 0.813  25s
+stage1 epoch 24/40  train loss 0.243  val loss 0.198 acc 0.919 two-digit 0.103  pairs 0.813  25s
+stage1 epoch 25/40  train loss 0.251  val loss 0.208 acc 0.914 two-digit 0.077  pairs 0.817  24s
+stage1 epoch 26/40  train loss 0.239  val loss 0.206 acc 0.924 two-digit 0.154  pairs 0.787  25s
+stage1 epoch 27/40  train loss 0.239  val loss 0.195 acc 0.917 two-digit 0.077  pairs 0.817  25s
+stage1 epoch 28/40  train loss 0.235  val loss 0.197 acc 0.923 two-digit 0.103  pairs 0.800  25s
+stage1 epoch 29/40  train loss 0.217  val loss 0.214 acc 0.923 two-digit 0.077  pairs 0.810  25s
+stage1 epoch 30/40  train loss 0.235  val loss 0.199 acc 0.925 two-digit 0.154  pairs 0.810  26s
+stage1 epoch 31/40  train loss 0.228  val loss 0.194 acc 0.925 two-digit 0.128  pairs 0.823  25s  *
+stage1 epoch 32/40  train loss 0.218  val loss 0.191 acc 0.923 two-digit 0.103  pairs 0.810  27s
+stage1 epoch 33/40  train loss 0.214  val loss 0.194 acc 0.919 two-digit 0.103  pairs 0.820  25s
+stage1 epoch 34/40  train loss 0.211  val loss 0.195 acc 0.925 two-digit 0.103  pairs 0.827  25s  *
+stage1 epoch 35/40  train loss 0.210  val loss 0.194 acc 0.924 two-digit 0.103  pairs 0.823  25s
+stage1 epoch 36/40  train loss 0.226  val loss 0.193 acc 0.921 two-digit 0.103  pairs 0.827  25s
+stage1 epoch 37/40  train loss 0.222  val loss 0.191 acc 0.927 two-digit 0.103  pairs 0.827  25s
+stage1 epoch 38/40  train loss 0.219  val loss 0.191 acc 0.920 two-digit 0.103  pairs 0.823  27s
+stage1 epoch 39/40  train loss 0.225  val loss 0.192 acc 0.921 two-digit 0.103  pairs 0.823  26s
+stage1 epoch 40/40  train loss 0.221  val loss 0.192 acc 0.924 two-digit 0.103  pairs 0.823  25s
+stage1: best epoch 34 by pair_accuracy 0.827
+two_step_pool_ex49 epoch 0  val loss 0.195 (uniform guess 2.350)
+two_step_pool_ex49 epoch  1/20  train loss 0.617  val loss 0.178 acc 0.911 two-digit 0.154  pairs 0.823  34s  *
+two_step_pool_ex49 epoch  2/20  train loss 0.480  val loss 0.164 acc 0.917 two-digit 0.231  pairs 0.817  37s  *
+two_step_pool_ex49 epoch  3/20  train loss 0.460  val loss 0.154 acc 0.919 two-digit 0.333  pairs 0.817  34s  *
+two_step_pool_ex49 epoch  4/20  train loss 0.419  val loss 0.146 acc 0.927 two-digit 0.308  pairs 0.823  36s  *
+two_step_pool_ex49 epoch  5/20  train loss 0.424  val loss 0.142 acc 0.927 two-digit 0.308  pairs 0.810  32s  *
+two_step_pool_ex49 epoch  6/20  train loss 0.422  val loss 0.137 acc 0.926 two-digit 0.359  pairs 0.810  37s  *
+two_step_pool_ex49 epoch  7/20  train loss 0.399  val loss 0.131 acc 0.926 two-digit 0.410  pairs 0.813  34s  *
+two_step_pool_ex49 epoch  8/20  train loss 0.398  val loss 0.137 acc 0.921 two-digit 0.410  pairs 0.797  34s
+two_step_pool_ex49 epoch  9/20  train loss 0.397  val loss 0.127 acc 0.925 two-digit 0.436  pairs 0.807  37s  *
+two_step_pool_ex49 epoch 10/20  train loss 0.395  val loss 0.124 acc 0.937 two-digit 0.462  pairs 0.793  32s  *
+two_step_pool_ex49 epoch 11/20  train loss 0.370  val loss 0.123 acc 0.938 two-digit 0.487  pairs 0.790  31s  *
+two_step_pool_ex49 epoch 12/20  train loss 0.347  val loss 0.122 acc 0.937 two-digit 0.513  pairs 0.797  32s  *
+two_step_pool_ex49 epoch 13/20  train loss 0.362  val loss 0.121 acc 0.936 two-digit 0.513  pairs 0.803  33s  *
+two_step_pool_ex49 epoch 14/20  train loss 0.365  val loss 0.119 acc 0.936 two-digit 0.513  pairs 0.803  32s  *
+two_step_pool_ex49 epoch 15/20  train loss 0.366  val loss 0.119 acc 0.943 two-digit 0.538  pairs 0.797  31s  *
+two_step_pool_ex49 epoch 16/20  train loss 0.370  val loss 0.118 acc 0.939 two-digit 0.538  pairs 0.797  29s  *
+two_step_pool_ex49 epoch 17/20  train loss 0.340  val loss 0.118 acc 0.936 two-digit 0.538  pairs 0.797  32s  *
+two_step_pool_ex49 epoch 18/20  train loss 0.359  val loss 0.118 acc 0.937 two-digit 0.538  pairs 0.797  29s
+two_step_pool_ex49 epoch 19/20  train loss 0.352  val loss 0.117 acc 0.942 two-digit 0.538  pairs 0.800  35s  *
+two_step_pool_ex49 epoch 20/20  train loss 0.377  val loss 0.118 acc 0.936 two-digit 0.564  pairs 0.797  29s
+two_step_pool_ex49: best epoch 19 by val_loss 0.117
+held out ['49']; dropped 2 linked train sequences
+run results/runs/two_step_full_ex49: 505,253 parameters on mps, count offset 3.05
+stage1 epoch 0  val loss 1.288 (uniform guess 2.350)
+stage1 epoch  1/40  train loss 1.467  val loss 0.816 acc 0.379 two-digit 0.000  pairs 0.000  61s  *
+stage1 epoch  2/40  train loss 1.184  val loss 0.544 acc 0.638 two-digit 0.000  pairs 0.003  40s  *
+stage1 epoch  3/40  train loss 0.839  val loss 0.332 acc 0.817 two-digit 0.000  pairs 0.247  38s  *
+stage1 epoch  4/40  train loss 0.731  val loss 0.297 acc 0.844 two-digit 0.000  pairs 0.503  33s  *
+stage1 epoch  5/40  train loss 0.613  val loss 0.289 acc 0.861 two-digit 0.000  pairs 0.647  32s  *
+stage1 epoch  6/40  train loss 0.523  val loss 0.330 acc 0.845 two-digit 0.000  pairs 0.637  29s
+stage1 epoch  7/40  train loss 0.452  val loss 0.275 acc 0.870 two-digit 0.026  pairs 0.747  28s  *
+stage1 epoch  8/40  train loss 0.416  val loss 0.272 acc 0.865 two-digit 0.026  pairs 0.673  29s
+stage1 epoch  9/40  train loss 0.402  val loss 0.263 acc 0.869 two-digit 0.000  pairs 0.700  26s
+stage1 epoch 10/40  train loss 0.355  val loss 0.240 acc 0.883 two-digit 0.051  pairs 0.760  30s  *
+stage1 epoch 11/40  train loss 0.355  val loss 0.262 acc 0.875 two-digit 0.051  pairs 0.763  30s  *
+stage1 epoch 12/40  train loss 0.346  val loss 0.253 acc 0.864 two-digit 0.000  pairs 0.733  31s
+stage1 epoch 13/40  train loss 0.335  val loss 0.226 acc 0.896 two-digit 0.026  pairs 0.743  28s
+stage1 epoch 14/40  train loss 0.298  val loss 0.241 acc 0.892 two-digit 0.026  pairs 0.767  26s  *
+stage1 epoch 15/40  train loss 0.308  val loss 0.218 acc 0.898 two-digit 0.026  pairs 0.753  28s
+stage1 epoch 16/40  train loss 0.295  val loss 0.225 acc 0.905 two-digit 0.026  pairs 0.780  28s  *
+stage1 epoch 17/40  train loss 0.300  val loss 0.216 acc 0.912 two-digit 0.051  pairs 0.797  28s  *
+stage1 epoch 18/40  train loss 0.264  val loss 0.203 acc 0.908 two-digit 0.128  pairs 0.780  27s
+stage1 epoch 19/40  train loss 0.275  val loss 0.237 acc 0.882 two-digit 0.103  pairs 0.803  28s  *
+stage1 epoch 20/40  train loss 0.261  val loss 0.211 acc 0.905 two-digit 0.051  pairs 0.810  26s  *
+stage1 epoch 21/40  train loss 0.275  val loss 0.222 acc 0.908 two-digit 0.051  pairs 0.797  26s
+stage1 epoch 22/40  train loss 0.252  val loss 0.212 acc 0.911 two-digit 0.051  pairs 0.797  26s
+stage1 epoch 23/40  train loss 0.255  val loss 0.218 acc 0.907 two-digit 0.077  pairs 0.753  29s
+stage1 epoch 24/40  train loss 0.241  val loss 0.202 acc 0.913 two-digit 0.103  pairs 0.787  28s
+stage1 epoch 25/40  train loss 0.234  val loss 0.210 acc 0.908 two-digit 0.103  pairs 0.797  26s
+stage1 epoch 26/40  train loss 0.218  val loss 0.215 acc 0.912 two-digit 0.103  pairs 0.797  26s
+stage1 epoch 27/40  train loss 0.231  val loss 0.199 acc 0.919 two-digit 0.154  pairs 0.810  26s
+stage1 epoch 28/40  train loss 0.220  val loss 0.206 acc 0.914 two-digit 0.077  pairs 0.807  26s
+stage1 epoch 29/40  train loss 0.219  val loss 0.211 acc 0.911 two-digit 0.103  pairs 0.780  25s
+stage1 epoch 30/40  train loss 0.226  val loss 0.210 acc 0.912 two-digit 0.103  pairs 0.807  27s
+stage1 epoch 31/40  train loss 0.220  val loss 0.204 acc 0.912 two-digit 0.154  pairs 0.817  26s  *
+stage1 epoch 32/40  train loss 0.208  val loss 0.213 acc 0.912 two-digit 0.103  pairs 0.803  26s
+stage1 epoch 33/40  train loss 0.213  val loss 0.210 acc 0.915 two-digit 0.103  pairs 0.813  26s
+stage1 epoch 34/40  train loss 0.214  val loss 0.206 acc 0.917 two-digit 0.103  pairs 0.807  26s
+stage1 epoch 35/40  train loss 0.210  val loss 0.204 acc 0.914 two-digit 0.103  pairs 0.813  28s
+stage1 epoch 36/40  train loss 0.215  val loss 0.203 acc 0.918 two-digit 0.154  pairs 0.820  26s  *
+stage1 epoch 37/40  train loss 0.210  val loss 0.202 acc 0.918 two-digit 0.154  pairs 0.817  25s
+stage1 epoch 38/40  train loss 0.206  val loss 0.203 acc 0.917 two-digit 0.128  pairs 0.810  26s
+stage1 epoch 39/40  train loss 0.197  val loss 0.203 acc 0.915 two-digit 0.128  pairs 0.807  27s
+stage1 epoch 40/40  train loss 0.220  val loss 0.204 acc 0.915 two-digit 0.128  pairs 0.807  28s
+stage1: best epoch 36 by pair_accuracy 0.820
+two_step_full_ex49 epoch 0  val loss 0.203 (uniform guess 2.350)
+two_step_full_ex49 epoch  1/20  train loss 0.592  val loss 0.180 acc 0.913 two-digit 0.205  pairs 0.827  40s  *
+two_step_full_ex49 epoch  2/20  train loss 0.471  val loss 0.165 acc 0.914 two-digit 0.282  pairs 0.833  34s  *
+two_step_full_ex49 epoch  3/20  train loss 0.436  val loss 0.156 acc 0.919 two-digit 0.282  pairs 0.813  37s  *
+two_step_full_ex49 epoch  4/20  train loss 0.431  val loss 0.145 acc 0.924 two-digit 0.333  pairs 0.807  37s  *
+two_step_full_ex49 epoch  5/20  train loss 0.408  val loss 0.140 acc 0.920 two-digit 0.410  pairs 0.813  33s  *
+two_step_full_ex49 epoch  6/20  train loss 0.408  val loss 0.135 acc 0.925 two-digit 0.410  pairs 0.793  32s  *
+two_step_full_ex49 epoch  7/20  train loss 0.389  val loss 0.135 acc 0.929 two-digit 0.487  pairs 0.800  32s  *
+two_step_full_ex49 epoch  8/20  train loss 0.388  val loss 0.133 acc 0.930 two-digit 0.487  pairs 0.800  36s  *
+two_step_full_ex49 epoch  9/20  train loss 0.388  val loss 0.126 acc 0.927 two-digit 0.513  pairs 0.800  32s  *
+two_step_full_ex49 epoch 10/20  train loss 0.393  val loss 0.127 acc 0.927 two-digit 0.538  pairs 0.793  32s
+two_step_full_ex49 epoch 11/20  train loss 0.365  val loss 0.125 acc 0.935 two-digit 0.538  pairs 0.797  32s  *
+two_step_full_ex49 epoch 12/20  train loss 0.357  val loss 0.124 acc 0.930 two-digit 0.538  pairs 0.800  33s  *
+two_step_full_ex49 epoch 13/20  train loss 0.358  val loss 0.122 acc 0.937 two-digit 0.615  pairs 0.797  29s  *
+two_step_full_ex49 epoch 14/20  train loss 0.357  val loss 0.121 acc 0.933 two-digit 0.615  pairs 0.780  35s  *
+two_step_full_ex49 epoch 15/20  train loss 0.377  val loss 0.121 acc 0.932 two-digit 0.615  pairs 0.797  28s
+two_step_full_ex49 epoch 16/20  train loss 0.363  val loss 0.121 acc 0.935 two-digit 0.615  pairs 0.787  39s  *
+two_step_full_ex49 epoch 17/20  train loss 0.362  val loss 0.120 acc 0.935 two-digit 0.615  pairs 0.800  30s  *
+two_step_full_ex49 epoch 18/20  train loss 0.338  val loss 0.120 acc 0.936 two-digit 0.615  pairs 0.793  35s  *
+two_step_full_ex49 epoch 19/20  train loss 0.379  val loss 0.119 acc 0.935 two-digit 0.615  pairs 0.793  32s  *
+two_step_full_ex49 epoch 20/20  train loss 0.364  val loss 0.119 acc 0.935 two-digit 0.615  pairs 0.800  32s  *
+two_step_full_ex49: best epoch 20 by val_loss 0.119
+results/runs/parseq_gate_ex49 is already trained; skipping (results are never overwritten)
+
+single_frame_ex49 on val (840 sequences, epoch 18)
+  sequence accuracy 0.815  one digit 0.845  two digit 0.205  macro (>=5) 0.603
+  anchor   accuracy 0.836  one digit 0.865  two digit 0.231  macro (>=5) 0.649
+  vote     accuracy 0.815  one digit 0.845  two digit 0.205  macro (>=5) 0.603
+  hold-out ['49']: 0.105 of 105; answers {'9': 29, '8': 22, '6': 11, '49': 11, '99': 10, '89': 8, '4': 7, '48': 2, '94': 1, '84': 1, '68': 1, '98': 1, '96': 1}
+  without the count offset (3.05): accuracy 0.725
+
+fused_ex49 on val (840 sequences, epoch 26)
+  sequence accuracy 0.867  one digit 0.866  two digit 0.872  macro (>=5) 0.882
+  anchor   accuracy 0.706  one digit 0.702  two digit 0.795  macro (>=5) 0.736
+  vote     accuracy 0.849  one digit 0.848  two digit 0.872  macro (>=5) 0.871
+  hold-out ['49']: 0.000 of 105; answers {'48': 22, '69': 18, '6': 17, '9': 15, '8': 12, '89': 9, '99': 7, '88': 2, '4': 1, '68': 1, '66': 1}
+
+two_step_mean_ex49 on val (840 sequences, epoch 20)
+  sequence accuracy 0.932  one digit 0.949  two digit 0.590  macro (>=5) 0.861
+  anchor   accuracy 0.827  one digit 0.849  two digit 0.385  macro (>=5) 0.708
+  vote     accuracy 0.924  one digit 0.944  two digit 0.513  macro (>=5) 0.829
+  hold-out ['49']: 0.219 of 105; answers {'9': 24, '49': 23, '99': 19, '8': 15, '89': 13, '6': 7, '48': 2, '88': 1, '86': 1}
+  without the count offset (3.05): accuracy 0.886
+
+two_step_pool_ex49 on val (840 sequences, epoch 19)
+  sequence accuracy 0.942  one digit 0.961  two digit 0.538  macro (>=5) 0.852
+  anchor   accuracy 0.832  one digit 0.855  two digit 0.359  macro (>=5) 0.701
+  vote     accuracy 0.929  one digit 0.950  two digit 0.487  macro (>=5) 0.816
+  hold-out ['49']: 0.248 of 105; answers {'49': 26, '9': 22, '89': 16, '99': 13, '8': 12, '6': 8, '48': 3, '88': 2, '4': 2, '66': 1}
+  without the count offset (3.05): accuracy 0.881
+
+two_step_full_ex49 on val (840 sequences, epoch 20)
+  sequence accuracy 0.935  one digit 0.950  two digit 0.615  macro (>=5) 0.877
+  anchor   accuracy 0.829  one digit 0.851  two digit 0.359  macro (>=5) 0.700
+  vote     accuracy 0.925  one digit 0.945  two digit 0.513  macro (>=5) 0.835
+  hold-out ['49']: 0.248 of 105; answers {'49': 26, '9': 25, '99': 19, '6': 10, '8': 10, '89': 9, '4': 2, '48': 2, '88': 1, '86': 1}
+  without the count offset (3.05): accuracy 0.902
+
+parseq_gate_ex49 on val (840 sequences, epoch 12)
+  sequence accuracy 0.960  one digit 0.960  two digit 0.949  macro (>=5) 0.975
+  anchor   accuracy 0.893  one digit 0.894  two digit 0.872  macro (>=5) 0.902
+  vote     accuracy 0.949  one digit 0.950  two digit 0.923  macro (>=5) 0.960
+  hold-out ['49']: 0.562 of 105; answers {'49': 59, '99': 16, '89': 10, '8': 8, '9': 7, '6': 3, '86': 1, '66': 1}
+comparison of 6 runs in results/compare
+final approach: parseq_gate
+held out []; dropped 0 linked train sequences
+run results/runs/parseq_gate_all: 6,000,012 parameters on mps, count offset 0.00
+parseq_gate_all epoch 0  val loss 1.040 (uniform guess 2.350)
+parseq_gate_all epoch  1/15  train loss 1.114  val loss 0.302 acc 0.857 two-digit 0.636  89s  *
+parseq_gate_all epoch  2/15  train loss 0.476  val loss 0.145 acc 0.915 two-digit 0.709  89s  *
+parseq_gate_all epoch  3/15  train loss 0.317  val loss 0.116 acc 0.935 two-digit 0.800  88s  *
+parseq_gate_all epoch  4/15  train loss 0.249  val loss 0.100 acc 0.940 two-digit 0.836  86s  *
+parseq_gate_all epoch  5/15  train loss 0.199  val loss 0.096 acc 0.944 two-digit 0.836  88s  *
+parseq_gate_all epoch  6/15  train loss 0.188  val loss 0.092 acc 0.947 two-digit 0.855  90s  *
+parseq_gate_all epoch  7/15  train loss 0.165  val loss 0.088 acc 0.946 two-digit 0.855  91s  *
+parseq_gate_all epoch  8/15  train loss 0.157  val loss 0.083 acc 0.951 two-digit 0.891  89s  *
+parseq_gate_all epoch  9/15  train loss 0.153  val loss 0.078 acc 0.959 two-digit 0.909  91s  *
+parseq_gate_all epoch 10/15  train loss 0.141  val loss 0.076 acc 0.958 two-digit 0.945  91s  *
+parseq_gate_all epoch 11/15  train loss 0.140  val loss 0.077 acc 0.957 two-digit 0.945  88s
+parseq_gate_all epoch 12/15  train loss 0.142  val loss 0.075 acc 0.961 two-digit 0.945  86s  *
+parseq_gate_all epoch 13/15  train loss 0.130  val loss 0.074 acc 0.964 two-digit 0.945  89s  *
+parseq_gate_all epoch 14/15  train loss 0.139  val loss 0.075 acc 0.961 two-digit 0.945  92s
+parseq_gate_all epoch 15/15  train loss 0.134  val loss 0.074 acc 0.961 two-digit 0.945  92s
+parseq_gate_all: best epoch 13 by val_loss 0.074
+
+parseq_gate_all on val (856 sequences, epoch 13)
+  sequence accuracy 0.964  one digit 0.965  two digit 0.945  macro (>=5) 0.974
+  anchor   accuracy 0.887  one digit 0.890  two digit 0.836  macro (>=5) 0.873
+  vote     accuracy 0.956  one digit 0.958  two digit 0.927  macro (>=5) 0.962
+comparison of 7 runs in results/compare
+
+parseq_gate_all on test (866 sequences, epoch 13)
+  sequence accuracy 0.964  one digit 0.964  two digit 0.964  macro (>=5) 0.969
+  anchor   accuracy 0.844  one digit 0.846  two digit 0.818  macro (>=5) 0.828
+  vote     accuracy 0.947  one digit 0.947  two digit 0.945  macro (>=5) 0.959
+comparison of 7 runs in results/compare
+
+single_frame_ex49 on test (850 sequences, epoch 18)
+  sequence accuracy 0.815  one digit 0.845  two digit 0.205  macro (>=5) 0.607
+  anchor   accuracy 0.819  one digit 0.846  two digit 0.256  macro (>=5) 0.655
+  vote     accuracy 0.815  one digit 0.845  two digit 0.205  macro (>=5) 0.607
+  hold-out ['49']: 0.125 of 16; answers {'6': 3, '9': 3, '99': 2, '4': 2, '49': 2, '46': 1, '89': 1, '48': 1, '8': 1}
+  without the count offset (3.05): accuracy 0.736
+comparison of 7 runs in results/compare
+
+fused_ex49 on test (850 sequences, epoch 26)
+  sequence accuracy 0.875  one digit 0.874  two digit 0.897  macro (>=5) 0.889
+  anchor   accuracy 0.696  one digit 0.693  two digit 0.769  macro (>=5) 0.714
+  vote     accuracy 0.842  one digit 0.840  two digit 0.897  macro (>=5) 0.869
+  hold-out ['49']: 0.000 of 16; answers {'69': 4, '48': 4, '99': 2, '6': 2, '89': 1, '8': 1, '9': 1, '98': 1}
+comparison of 7 runs in results/compare
+
+two_step_mean_ex49 on test (850 sequences, epoch 20)
+  sequence accuracy 0.928  one digit 0.946  two digit 0.564  macro (>=5) 0.798
+  anchor   accuracy 0.807  one digit 0.831  two digit 0.308  macro (>=5) 0.654
+  vote     accuracy 0.912  one digit 0.930  two digit 0.538  macro (>=5) 0.775
+  hold-out ['49']: 0.312 of 16; answers {'49': 5, '99': 4, '9': 3, '69': 1, '89': 1, '6': 1, '4': 1}
+  without the count offset (3.05): accuracy 0.884
+comparison of 7 runs in results/compare
+
+two_step_pool_ex49 on test (850 sequences, epoch 19)
+  sequence accuracy 0.920  one digit 0.940  two digit 0.513  macro (>=5) 0.764
+  anchor   accuracy 0.808  one digit 0.830  two digit 0.359  macro (>=5) 0.674
+  vote     accuracy 0.912  one digit 0.928  two digit 0.564  macro (>=5) 0.782
+  hold-out ['49']: 0.250 of 16; answers {'49': 4, '99': 3, '9': 3, '89': 2, '4': 2, '48': 1, '6': 1}
+  without the count offset (3.05): accuracy 0.862
+comparison of 7 runs in results/compare
+
+two_step_full_ex49 on test (850 sequences, epoch 20)
+  sequence accuracy 0.928  one digit 0.945  two digit 0.590  macro (>=5) 0.802
+  anchor   accuracy 0.796  one digit 0.824  two digit 0.231  macro (>=5) 0.618
+  vote     accuracy 0.909  one digit 0.928  two digit 0.513  macro (>=5) 0.767
+  hold-out ['49']: 0.375 of 16; answers {'49': 6, '99': 4, '9': 4, '6': 1, '4': 1}
+  without the count offset (3.05): accuracy 0.879
+comparison of 7 runs in results/compare
+
+parseq_gate_ex49 on test (850 sequences, epoch 12)
+  sequence accuracy 0.959  one digit 0.958  two digit 0.974  macro (>=5) 0.972
+  anchor   accuracy 0.844  one digit 0.846  two digit 0.795  macro (>=5) 0.828
+  vote     accuracy 0.949  one digit 0.949  two digit 0.949  macro (>=5) 0.966
+  hold-out ['49']: 0.688 of 16; answers {'49': 11, '99': 2, '89': 1, '4': 1, '8': 1}
+comparison of 7 runs in results/compare
+done: results/compare/ holds the table and graphs; weights/final/ the shipped model

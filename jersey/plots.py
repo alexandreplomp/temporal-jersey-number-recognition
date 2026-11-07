@@ -68,8 +68,8 @@ def temporal(metrics, path):
         right.bar([x + 0.27 * i for x in range(len(names))], [metrics[n]["methods"][method]["accuracy"] for n in names],
                   width=0.27, label=method)
     right.set_xticks([x + 0.27 for x in range(len(names))], names, rotation=20, fontsize=8)
-    right.set(title="sequence vs anchor alone vs frame vote", ylabel="val accuracy", ylim=(0, 1))
-    right.legend()
+    right.set(title="sequence vs anchor alone vs frame vote", ylabel="val accuracy", ylim=(0, 1.15), yticks=[0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    right.legend(loc="upper center", ncol=3, fontsize=8)
     _save(figure, path)
 
 

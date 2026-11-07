@@ -364,9 +364,10 @@ def compare(results):
         if metrics["hold_out"]:
             answers[run_dir.name] = metrics["hold_out"]["answer_counts"]
         rows.append(_table_row(run_dir, metrics, history))
-        if run_dir.name.endswith("_all") and (run_dir / "stage1").exists():
+        if run_dir.name.endswith("_all"):  # the final model's train and val curves (stage switch marked if two stages)
             switch = json.loads((run_dir / "history.json").read_text())["epochs"][0]["step"]
-            plots.curves(history, out / f"curves_{run_dir.name}.png", stage_switch=switch)
+            plots.curves(history, out / f"curves_{run_dir.name}.png",
+                         stage_switch=switch if (run_dir / "stage1").exists() else None)
     with (out / "table.csv").open("w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()

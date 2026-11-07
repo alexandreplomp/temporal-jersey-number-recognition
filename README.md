@@ -36,7 +36,7 @@ Each script is one step; it reads the previous step's files and writes its own.
 | Evaluate | `uv run evaluate.py two_step_mean_ex49` (add `--split test` once) | `metrics_val.json` in the run, and `results/compare/` |
 | Predict | `uv run predict.py <folder>` | one number |
 
-`reproduce.sh` runs everything in order (about 5-6 h on an M-series Mac):
+`reproduce.sh` runs everything in order (about 3-4 h on an M-series Mac):
 1. the tests
 2. the comparison runs with 49 held out
 3. the choice of the final approach on val
@@ -59,11 +59,22 @@ The approaches are the table at the top of `train.py`; each row changes one thin
 
 ## Results
 
-Filled in from `results/compare/table.csv` after `reproduce.sh`.
+From one run of `reproduce.sh` (`results/compare/table.csv`, `reproduce.log`). The final model is
+`parseq_gate` trained on all ten numbers, shipped in `weights/final/`: **0.964 on the 866 test sequences**
+(anchor alone 0.844, frame vote 0.947), 6.0M parameters, 22.9 MB, 36 ms per 10-frame sequence on one CPU
+thread. The comparison below holds 49 out of training, so "Held-out 49" is a number never seen in training
+(105 sequences of train and val players; 16 test-player sequences).
 
-| Run | Val accuracy | Two-digit | Held-out 49 | Anchor alone | Frame vote | Test accuracy |
-|---|---|---|---|---|---|---|
-| TODO | | | | | | |
+| Run (49 held out) | Val accuracy | Two-digit | Held-out 49 | Anchor alone | Frame vote | Test accuracy | Held-out 49, test | Size |
+|---|---|---|---|---|---|---|---|---|
+| `single_frame` | 0.815 | 0.205 | 0.105 | 0.836 | 0.815 | 0.815 | 2/16 | 1.5 MB |
+| `fused` | 0.867 | 0.872 | 0.000 | 0.706 | 0.849 | 0.875 | 0/16 | 1.2 MB |
+| `two_step_mean` | 0.932 | 0.590 | 0.219 | 0.827 | 0.924 | 0.928 | 5/16 | 1.5 MB |
+| `two_step_pool` | 0.942 | 0.538 | 0.248 | 0.832 | 0.929 | 0.920 | 4/16 | 1.5 MB |
+| `two_step_full` | 0.935 | 0.615 | 0.248 | 0.829 | 0.925 | 0.928 | 6/16 | 2.0 MB |
+| **`parseq_gate`** | **0.960** | **0.949** | **0.562** | 0.893 | 0.949 | **0.959** | **11/16** | 22.9 MB |
+
+The graphs are in `results/compare/` after a run; [REPORT.md](REPORT.md) discusses them.
 
 ## Layout
 
@@ -78,5 +89,5 @@ jersey/
   metrics.py  scores with 95% intervals
   plots.py    every figure
 tests/  test_parts.py  test_pipeline.py  helpers.py
-weights/final/   the shipped model (after reproduce.sh)
+weights/final/   the shipped model: parseq_gate on all numbers, with its config, split and metrics
 ```

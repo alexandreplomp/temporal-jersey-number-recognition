@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every step of the hand-in, in order: about 5-6 hours on an M-series Mac (MPS).
+# Every step of the hand-in, in order: about 3-4 hours on an M-series Mac (MPS).
 # Run from the project root with the data in data/. Nothing is ever overwritten, and the script can be
 # rerun after a stop: train.py skips finished runs (and refuses half-finished ones: delete those), and
 # each run is scored on the test split only once.

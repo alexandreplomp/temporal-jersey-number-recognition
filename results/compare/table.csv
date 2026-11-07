@@ -1,0 +1,8 @@
+run,approach,reader,temporal,max_frames,parameters,weights_mb,ms_per_sequence_cpu_1_thread,val_accuracy,val_one_digit,val_two_digit,val_macro_5,anchor_accuracy,vote_accuracy,stable_share,holdout_accuracy,pair_accuracy,val_accuracy_no_offset,test_accuracy,test_holdout_accuracy
+fused_ex49,fused,fused,mean,10,304835,1.23,22.62,0.8667,0.8664,0.8718,0.8824,0.706,0.8488,0.7214,0.0,0.0233,,0.8753,0.0
+parseq_gate_all,parseq_gate,parseq,pool,10,6000012,22.93,35.8,0.9638,0.965,0.9455,0.9737,0.8867,0.9556,0.8376,,,,0.9642,
+parseq_gate_ex49,parseq_gate,parseq,pool,10,6000012,22.93,36.04,0.9595,0.96,0.9487,0.9753,0.8929,0.9488,0.8464,0.5619,,,0.9588,0.6875
+single_frame_ex49,single_frame,two-step,mean,1,362916,1.46,3.32,0.8155,0.8452,0.2051,0.6029,0.8357,0.8155,nan,0.1048,0.81,0.725,0.8153,0.125
+two_step_full_ex49,two_step_full,two-step,transformer,10,505253,2.0,23.35,0.9345,0.9501,0.6154,0.8769,0.8286,0.925,0.7988,0.2476,0.8,0.9024,0.9282,0.375
+two_step_mean_ex49,two_step_mean,two-step,mean,10,362916,1.46,23.16,0.9321,0.9488,0.5897,0.8607,0.8274,0.9238,0.8143,0.219,0.7967,0.8857,0.9282,0.3125
+two_step_pool_ex49,two_step_pool,two-step,pool,10,371237,1.49,23.23,0.9417,0.9613,0.5385,0.8521,0.8321,0.9286,0.8119,0.2476,0.8,0.881,0.92,0.25

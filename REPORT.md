@@ -68,6 +68,8 @@ everywhere, so 94 is "a 9, then a 4" even with no 94 in training.
 The structure alone is not enough on this data. Each was measured with 49 held out of training
 (`results/compare/holdout.png`):
 
+![What held-out 49 is read as, per approach](results/compare/holdout.png)
+
 | Reader (49 held out) | Held-out 49 right, val players (105) | Test players (16) | What it answers instead |
 |---|---|---|---|
 | `fused`: two digit heads on whole-crop features | **0** | 0 | 48, 69, 6, 9 |
@@ -161,6 +163,10 @@ so there is no overfitting. The running training loss is higher only because tra
 augmented. Val macro accuracy over *all* numbers (0.83) is pulled down by 88, which has one val sequence.
 `results/compare/curves.png` shows every approach.
 
+![Final model: loss, accuracy, two-digit and macro accuracy per epoch](results/compare/curves_parseq_gate_all.png)
+
+![Val loss and accuracy per epoch, every approach](results/compare/curves.png)
+
 **It reads the digits, not the kit** (val, final model): covering the number area drops accuracy from
 0.964 to 0.141, below always guessing 8 (0.371); showing only the number area keeps 0.964; grayscale
 keeps 0.961.
@@ -168,6 +174,8 @@ keeps 0.961.
 ## Temporal stability: sequence vs anchor
 
 From `results/compare/temporal.png` and `stability` in the metrics files:
+
+![Accuracy after the first k frames; sequence vs anchor vs vote](results/compare/temporal.png)
 
 | | Val | Test |
 |---|---|---|

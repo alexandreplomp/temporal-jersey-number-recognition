@@ -1,0 +1,9 @@
+{
+  "sequences": 866,
+  "accuracy": 0.964203233256351,
+  "macro_accuracy_5": 0.9689509959646843,
+  "recorded": "weights/final/predictions_test.csv",
+  "same_answers": 866,
+  "device": "mps",
+  "torch": "2.15.0"
+}

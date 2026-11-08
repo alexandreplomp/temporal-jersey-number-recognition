@@ -1,0 +1,440 @@
+{
+  "run": "parseq_gate_all",
+  "match_overlap": {
+    "all": {
+      "count": 866,
+      "correct": 835,
+      "accuracy": 0.964203233256351,
+      "low": 0.9496376033236114,
+      "high": 0.9746686151878969
+    },
+    "match in train, other number": {
+      "count": 406,
+      "correct": 387,
+      "accuracy": 0.9532019704433498,
+      "low": 0.9280691782523445,
+      "high": 0.9698386963997163
+    },
+    "match not in train": {
+      "count": 133,
+      "correct": 131,
+      "accuracy": 0.9849624060150376,
+      "low": 0.94682928627284,
+      "high": 0.9958665021423787
+    },
+    "same match and number in train": {
+      "count": 327,
+      "correct": 317,
+      "accuracy": 0.9694189602446484,
+      "low": 0.9446305776113757,
+      "high": 0.9833059333957046
+    }
+  },
+  "paired_tests": {
+    "first_frame_accuracy": 0.8498845265588915,
+    "sequence vs anchor": {
+      "only sequence right": 120,
+      "only anchor right": 16,
+      "p_exact": 6.905764227013771e-21
+    },
+    "sequence vs vote": {
+      "only sequence right": 19,
+      "only vote right": 4,
+      "p_exact": 0.002599477767944336
+    },
+    "first_frame vs anchor": {
+      "only first_frame right": 90,
+      "only anchor right": 85,
+      "p_exact": 0.7624694402612475
+    }
+  },
+  "track_bootstrap": {
+    "test_accuracy": {
+      "accuracy": 0.964203233256351,
+      "low": 0.9509918093681335,
+      "high": 0.9764428734779358,
+      "tracks": 682,
+      "sequences": 866
+    }
+  },
+  "hold_out": {
+    "fused_ex49": {
+      "train players": {
+        "count": 89,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.04137800296418846
+      },
+      "val players": {
+        "count": 16,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.19361341827271994
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.19361341827271994
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "parseq_gate_ex49": {
+      "train players": {
+        "count": 89,
+        "correct": 53,
+        "accuracy": 0.5955056179775281,
+        "low": 0.491640345784806,
+        "high": 0.6914672266827087
+      },
+      "val players": {
+        "count": 16,
+        "correct": 6,
+        "accuracy": 0.375,
+        "low": 0.18480982554752803,
+        "high": 0.613593529020652
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.5619047619047619,
+        "low": 0.46000000834465027,
+        "high": 0.6666666865348816,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 11,
+        "accuracy": 0.6875,
+        "low": 0.4440393186673406,
+        "high": 0.8583556494803894
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.6875,
+        "low": 0.4444444477558136,
+        "high": 0.8823529481887817,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "parseq_gate_ex49_s1": {
+      "train players": {
+        "count": 89,
+        "correct": 53,
+        "accuracy": 0.5955056179775281,
+        "low": 0.491640345784806,
+        "high": 0.6914672266827087
+      },
+      "val players": {
+        "count": 16,
+        "correct": 6,
+        "accuracy": 0.375,
+        "low": 0.18480982554752803,
+        "high": 0.613593529020652
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.5619047619047619,
+        "low": 0.46000000834465027,
+        "high": 0.6666666865348816,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 11,
+        "accuracy": 0.6875,
+        "low": 0.4440393186673406,
+        "high": 0.8583556494803894
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.6875,
+        "low": 0.4444444477558136,
+        "high": 0.8823529481887817,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "parseq_gate_ex49_s2": {
+      "train players": {
+        "count": 89,
+        "correct": 53,
+        "accuracy": 0.5955056179775281,
+        "low": 0.491640345784806,
+        "high": 0.6914672266827087
+      },
+      "val players": {
+        "count": 16,
+        "correct": 6,
+        "accuracy": 0.375,
+        "low": 0.18480982554752803,
+        "high": 0.613593529020652
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.5619047619047619,
+        "low": 0.46000000834465027,
+        "high": 0.6666666865348816,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 10,
+        "accuracy": 0.625,
+        "low": 0.3864064709793481,
+        "high": 0.815190174452472
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.625,
+        "low": 0.375,
+        "high": 0.8421052694320679,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "parseq_gate_ex49_scratch": {
+      "train players": {
+        "count": 89,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.04137800296418846
+      },
+      "val players": {
+        "count": 16,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.19361341827271994
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.19361341827271994
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "single_frame_ex49": {
+      "train players": {
+        "count": 89,
+        "correct": 11,
+        "accuracy": 0.12359550561797752,
+        "low": 0.07043444583719614,
+        "high": 0.20790629796730525
+      },
+      "val players": {
+        "count": 16,
+        "correct": 0,
+        "accuracy": 0.0,
+        "low": 0.0,
+        "high": 0.19361341827271994
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.10476190476190476,
+        "low": 0.049504950642585754,
+        "high": 0.1682243049144745,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 2,
+        "accuracy": 0.125,
+        "low": 0.034976749337057134,
+        "high": 0.3602333143674828
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.125,
+        "low": 0.0,
+        "high": 0.3333333432674408,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "two_step_full_ex49": {
+      "train players": {
+        "count": 89,
+        "correct": 22,
+        "accuracy": 0.24719101123595505,
+        "low": 0.16928115452187475,
+        "high": 0.3460223301229396
+      },
+      "val players": {
+        "count": 16,
+        "correct": 4,
+        "accuracy": 0.25,
+        "low": 0.10181901984237346,
+        "high": 0.49498768929398645
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.24761904761904763,
+        "low": 0.1651376187801361,
+        "high": 0.336448609828949,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 6,
+        "accuracy": 0.375,
+        "low": 0.18480982554752803,
+        "high": 0.613593529020652
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.375,
+        "low": 0.15000000596046448,
+        "high": 0.6428571343421936,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "two_step_mean_ex49": {
+      "train players": {
+        "count": 89,
+        "correct": 19,
+        "accuracy": 0.21348314606741572,
+        "low": 0.14114687024752387,
+        "high": 0.3095304123499324
+      },
+      "val players": {
+        "count": 16,
+        "correct": 4,
+        "accuracy": 0.25,
+        "low": 0.10181901984237346,
+        "high": 0.49498768929398645
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.21904761904761905,
+        "low": 0.14018692076206207,
+        "high": 0.30612245202064514,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 5,
+        "accuracy": 0.3125,
+        "low": 0.14164435051961052,
+        "high": 0.5559606813326594
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.3125,
+        "low": 0.1111111119389534,
+        "high": 0.5714285969734192,
+        "tracks": 14,
+        "sequences": 16
+      }
+    },
+    "two_step_pool_ex49": {
+      "train players": {
+        "count": 89,
+        "correct": 23,
+        "accuracy": 0.25842696629213485,
+        "low": 0.1788141889199488,
+        "high": 0.358031363073985
+      },
+      "val players": {
+        "count": 16,
+        "correct": 3,
+        "accuracy": 0.1875,
+        "low": 0.06591478773586765,
+        "high": 0.4300935986845823
+      },
+      "val pooled, track bootstrap": {
+        "accuracy": 0.24761904761904763,
+        "low": 0.16346153616905212,
+        "high": 0.336448609828949,
+        "tracks": 80,
+        "sequences": 105
+      },
+      "test players": {
+        "count": 16,
+        "correct": 4,
+        "accuracy": 0.25,
+        "low": 0.10181901984237346,
+        "high": 0.49498768929398645
+      },
+      "test pooled, track bootstrap": {
+        "accuracy": 0.25,
+        "low": 0.05882352963089943,
+        "high": 0.5,
+        "tracks": 14,
+        "sequences": 16
+      }
+    }
+  },
+  "gate": {
+    "position 1": {
+      "sequences_with_both": 258,
+      "frames_right": 1560,
+      "frames_wrong": 538,
+      "mean_weight_right": 1.0724231925864631,
+      "mean_weight_wrong": 0.7899996639336684
+    },
+    "position 2": {
+      "sequences_with_both": 66,
+      "frames_right": 432,
+      "frames_wrong": 119,
+      "mean_weight_right": 1.0314631774262697,
+      "mean_weight_wrong": 0.8857807408110434
+    }
+  },
+  "few_frames": {
+    "4": {
+      "val_accuracy": 0.955607476635514,
+      "ms_per_sequence_cpu_1_thread": 16.27
+    },
+    "10": {
+      "val_accuracy": 0.9637850467289719,
+      "ms_per_sequence_cpu_1_thread": 36.97
+    }
+  },
+  "int8": {
+    "weights_mb": 6.9,
+    "val_accuracy": 0.9626168224299065,
+    "ms_per_sequence_cpu_1_thread": 165.63,
+    "fp32_ms_per_sequence_cpu_1_thread": 37.6
+  },
+  "head_drift": {
+    "end": 0.9996,
+    "0": 0.9979,
+    "1": 0.9991,
+    "2": 0.9989,
+    "3": 0.9982,
+    "4": 0.999,
+    "5": 0.9969,
+    "6": 0.9988,
+    "7": 0.9994,
+    "8": 0.9989,
+    "9": 0.9988
+  }
+}

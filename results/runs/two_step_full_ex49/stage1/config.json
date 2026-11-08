@@ -1,0 +1,33 @@
+{
+  "approach": "two_step_full",
+  "reader": "two-step",
+  "temporal": "transformer",
+  "max_frames": 10,
+  "exclude": [
+    "49"
+  ],
+  "linked_dropped": [
+    "4/1051_6218/4",
+    "9/1022_6209/1"
+  ],
+  "seed": 0,
+  "count_offset": 3.0542096453018193,
+  "data": "data",
+  "device": "mps",
+  "parameters": 505253,
+  "torch": "2.15.0",
+  "stage": {
+    "epochs": 40,
+    "lr": 0.0003,
+    "backbone_lr": 3e-05,
+    "pair_share": 0.4,
+    "single_share": 0.4,
+    "real_pairs": false,
+    "selected_by": "pair_accuracy",
+    "highest": true
+  },
+  "sequences": {
+    "train": 3838,
+    "val": 840
+  }
+}

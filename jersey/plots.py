@@ -55,7 +55,7 @@ def compare_curves(segments, path):
             colour = f"C{index}"
             for number, stage in enumerate(stages):
                 axis.plot([entry["step"] for entry in stage], [entry[key] for entry in stage], color=colour,
-                          linestyle="--" if number else "-", label=name if number == len(stages) - 1 else None)
+                          linestyle="--" if number else "-", label=name if number == 0 else None)
         for switch in switches:
             axis.axvline(switch, color="grey", linestyle=":", linewidth=1)
         axis.set_title(key.replace("_", " ") + (" (dotted line: stage 2 starts from stage 1's best epoch)" if switches else ""),
@@ -101,7 +101,7 @@ def holdout(answers, path, held="49", named=("99", "89")):
     kinds = ("right", *named, "other two-digit", "one digit")
     figure = Figure(figsize=(9, 4.5))
     axis = figure.subplots()
-    labels = [f"{name}\n(n={found['sequences']})" for name, found in answers.items()]
+    labels = [f"{name.removesuffix('_ex' + held)}\n(n={found['sequences']})" for name, found in answers.items()]
     bottoms = [0.0] * len(answers)
     for kind in kinds:
         counts = [sum(c for a, c in found["counts"].items() if kind_of(a) == kind) for found in answers.values()]
@@ -113,6 +113,36 @@ def holdout(answers, path, held="49", named=("99", "89")):
              ylabel="share of sequences", ylim=(0, 1))
     axis.tick_params(axis="x", labelsize=7)
     axis.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
+    _save(figure, path)
+
+
+# The final model as drawn in REPORT.md: (box text, tensor shape on the arrow into the next box).
+ARCHITECTURE = (
+    ("sequence of T crops\n(T ≤ 10, 192 × 96)", "B, T, 3, 192, 96"),
+    ("number area:\nrows 17-48%,\ncolumns 15-85%,\nstretched to 32 × 128", "N real frames,\n3, 32, 128"),
+    ("PARSeq-Tiny encoder\n(ViT, 12 layers, 5.38M)\nshared over frames", "N, 128 patches,\n192"),
+    ("PARSeq decoder,\n1 layer (0.60M):\nquery 1 → digit 1,\nquery 2 → digit 2 or end", "B, T, 2, 192"),
+    ("frame gate per position\n(learned weight\nper frame, 0.02M)", "B, 2, 192"),
+    ("linear head:\nposition 1: digit 0-9\nposition 2: digit 0-9\nor BLANK", "B, 2, 11"),
+    ("one number\n+ confidence", None),
+)
+
+
+def architecture(path, boxes=ARCHITECTURE):
+    """The final model's blocks left to right, with the tensor shape on each arrow (N = real frames <= B x T)."""
+    figure = Figure(figsize=(2.3 * len(boxes), 1.9))
+    axis = figure.subplots()
+    width, gap = 1.6, 0.7
+    for i, (text, shape) in enumerate(boxes):
+        left = i * (width + gap)
+        axis.add_patch(Rectangle((left, 0.1), width, 1.2, facecolor="#eef3fb", edgecolor="#3b5b92", linewidth=1.2))
+        axis.text(left + width / 2, 0.7, text, ha="center", va="center", fontsize=8)
+        if shape is not None:
+            axis.annotate("", xy=(left + width + gap, 0.7), xytext=(left + width, 0.7),
+                          arrowprops={"arrowstyle": "->", "color": "#3b5b92"})
+            axis.text(left + width + gap / 2, 0.8, shape, ha="center", va="bottom", fontsize=6.5, color="#7a2e2e")
+    axis.set(xlim=(-0.1, len(boxes) * (width + gap) - gap + 0.1), ylim=(0.05, 1.35))
+    axis.axis("off")
     _save(figure, path)
 
 

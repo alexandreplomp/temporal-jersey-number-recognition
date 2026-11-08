@@ -589,6 +589,7 @@ def compare(results):
     ladder = ladder_runs([run_dir.name for run_dir in runs])  # the graphs: one run per approach, same val set
     plots.compare_curves({name: segments[name] for name in ladder}, out / "curves.png")
     plots.temporal({name: val[name] for name in ladder}, out / "temporal.png")
+    plots.architecture(out / "architecture.png")
     if any(name in answers for name in ladder):
         plots.holdout({name: answers[name] for name in ladder if name in answers}, out / "holdout.png")
     print(f"comparison of {len(runs)} runs in {out}; graphs of {', '.join(ladder)}")

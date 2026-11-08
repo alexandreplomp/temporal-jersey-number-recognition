@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Every step of the hand-in, in order: about 3-4 hours on an M-series Mac (MPS).
+# Every step of the hand-in, in order: about 6 hours on an Apple M4 Pro (MPS). The first training run
+# downloads the ImageNet MobileNetV3 and PARSeq-Tiny weights, so it needs internet. MPS training is not
+# bit-for-bit deterministic: a rerun gives slightly different numbers; the committed metrics are the record.
 # Run from the project root with the data in data/. Nothing is ever overwritten, and the script can be
 # rerun after a stop: train.py skips finished runs (and refuses half-finished ones: delete those), and
 # each run is scored on the test split only once.
@@ -37,7 +39,23 @@ for run in "${FINAL}_all" single_frame_ex49 fused_ex49 two_step_mean_ex49 two_st
     [ -f "results/runs/$run/metrics_test.json" ] || uv run evaluate.py "$run" --split test
 done
 
-# 6. Ship the final weights (used by predict.py).
+# 6. Ship the final weights (used by predict.py) and check they give the recorded test answers.
 mkdir -p weights/final
-cp "results/runs/${FINAL}_all/"{best.pt,config.json,splits.json,metrics_val.json,metrics_test.json} weights/final/
+cp "results/runs/${FINAL}_all/"{best.pt,config.json,splits.json,metrics_val.json,metrics_test.json,predictions_test.csv} weights/final/
+uv run evaluate.py --verify weights/final
+
+# 7. How much of the held-out result is the final approach, and how much its pretraining and its seed:
+#    two more seeds and a random start, 49 held out as before (not candidates for the final approach).
+for extra in "--seed 1" "--seed 2" "--no-pretrained"; do
+    uv run train.py --approach "$FINAL" --exclude 49 $extra
+done
+for run in "${FINAL}_ex49_s1" "${FINAL}_ex49_s2" "${FINAL}_ex49_scratch"; do
+    [ -f "results/runs/$run/metrics_val.json" ] || uv run evaluate.py "$run"
+    [ -f "results/runs/$run/metrics_test.json" ] || uv run evaluate.py "$run" --split test
+done
+
+# 8. Extra evidence for the report: match overlap, paired tests, track-level intervals, gate weights,
+#    int8 and fewer frames (results/compare/analysis_<run>.json; test predictions are only read).
+uv run evaluate.py --analyse "${FINAL}_all"
+uv run evaluate.py
 echo "done: results/compare/ holds the table and graphs; weights/final/ the shipped model"

@@ -49,6 +49,46 @@ def wilson_interval(correct, count, z=1.96):
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
+def mcnemar_exact(only_first, only_second):
+    """Two-sided exact McNemar p-value: of the sequences where exactly one method is right, is the split 50/50?
+
+    only_first and only_second count the sequences only the first or only the second method gets right.
+    """
+    discordant = only_first + only_second
+    if discordant == 0:
+        return 1.0
+    tail = sum(math.comb(discordant, k) for k in range(min(only_first, only_second) + 1)) / 2 ** discordant
+    return min(1.0, 2 * tail)
+
+
+def group_bootstrap(correct, groups, resamples=2000, seed=0):
+    """95% interval of accuracy when whole groups (e.g. tracks) are resampled, not single sequences.
+
+    correct and groups are one entry per sequence. Sequences of one group are correlated, so this
+    interval is the honest one when a group has several sequences; it is wider than Wilson's.
+    """
+    by_group = defaultdict(list)
+    for right, group in zip(correct, groups):
+        by_group[group].append(float(right))
+    totals = torch.tensor([[sum(v), len(v)] for v in by_group.values()])
+    generator = torch.Generator().manual_seed(seed)
+    picks = torch.randint(len(totals), (resamples, len(totals)), generator=generator)
+    sums = totals[picks].sum(dim=1)
+    accuracies = (sums[:, 0] / sums[:, 1]).sort().values
+    return accuracies[int(0.025 * resamples)].item(), accuracies[int(0.975 * resamples) - 1].item()
+
+
+def track_of(sequence_id):
+    """"49/<match>_<track>/<sequence>" -> "<match>_<track>": the player folder, one track of one player."""
+    return sequence_id.split("/")[1]
+
+
+def match_of(sequence_id):
+    """"49/<match>_<track>/<sequence>" -> "<match>". The first part of a player folder is shared across
+    numbers and players, so it most likely names the match or video (not documented in the data)."""
+    return track_of(sequence_id).split("_")[0]
+
+
 def per_number(predictions, labels):
     """Return {number: count, correct, accuracy, low, high} for each number in labels."""
     return _summaries(to_numbers(labels), to_numbers(labels), to_numbers(predictions))

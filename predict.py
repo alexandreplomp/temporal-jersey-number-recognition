@@ -6,13 +6,15 @@ Frames are read in time order (by the number in <prefix>_<frame>_...), at most m
 spread evenly; any *_anchor image is ignored, since a deployed tracker has no anchor. Prints the
 number and its confidence.
 
---two-digit-share sets the share of two-digit numbers expected where the model is used. The weights
-carry this data's mix (about 5% two-digit numbers); a league where about half the numbers have two
-digits should pass 0.5 (see jersey/model.count_prior).
+--two-digit-share (two-step readers only) sets the share of two-digit numbers expected where the
+model is used. Those weights carry this data's mix (about 5% two-digit numbers); a league where about
+half the numbers have two digits should pass 0.5 (see jersey/model.count_prior). The shipped PARSeq
+model has no count head, so it warns and ignores the flag.
 """
 
 from pathlib import Path
 import argparse
+import sys
 
 import torch
 from torchvision.transforms import v2
@@ -28,7 +30,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("sequence", type=Path, help="folder with the crops of one player")
     parser.add_argument("--weights", type=Path, default=WEIGHTS, help="folder with best.pt (a run or weights/...)")
-    parser.add_argument("--two-digit-share", type=float, help="share of two-digit numbers where the model is used")
+    parser.add_argument("--two-digit-share", type=float,
+                        help="two-step readers only: share of two-digit numbers where the model is used")
     parser.add_argument("--device", default="auto")
     return parser.parse_args(argv)
 
@@ -36,7 +39,10 @@ def parse_args(argv=None):
 @torch.no_grad()
 def read_number(model, sequence_dir, max_frames, device):
     """The number read from a folder of crops and its confidence; the anchor is never loaded."""
-    _, frame_paths = find_images(sequence_dir)
+    try:
+        _, frame_paths = find_images(sequence_dir)
+    except (FileNotFoundError, NotADirectoryError, ValueError) as error:
+        raise SystemExit(f"predict.py: cannot read {sequence_dir}: {error}") from None
     resize = v2.Resize(IMAGE_SIZE, antialias=True)
     picked = pick_frames(len(frame_paths), max_frames, at_random=False).tolist()
     frames = NORMALIZE(torch.stack([load_image(frame_paths[i], resize) for i in picked]))[None].to(device)
@@ -48,8 +54,12 @@ def main(argv=None):
     args = parse_args(argv)
     device = pick_device(args.device)
     model, config, _ = load_run(args.weights, device)
-    if args.two_digit_share is not None and config["reader"] == "two-step":
-        model.count_offset = offset_for_share(args.two_digit_share)
+    if args.two_digit_share is not None:
+        if config["reader"] == "two-step":
+            model.count_offset = offset_for_share(args.two_digit_share)
+        else:
+            print(f"warning: --two-digit-share only applies to two-step readers; ignored for {config['reader']}",
+                  file=sys.stderr)
     number, confidence = read_number(model, args.sequence, config["max_frames"], device)
     print(f"{number}  (confidence {confidence:.2f})")
     return number

@@ -59,7 +59,7 @@ def test_prepare_splits_by_player_and_sends_rare_numbers_to_train(tmp_path):
 
 
 def test_two_stage_training_writes_both_stages_skips_finished_runs_and_refuses_unfinished_ones(pipeline):
-    run = pipeline / "results" / "runs" / "two_step_mean_ex49"
+    run = pipeline / "results" / "runs" / "two_step_mean_ex49_scratch"
     config = json.loads((run / "config.json").read_text())
     history = json.loads((run / "history.json").read_text())
 
@@ -67,6 +67,7 @@ def test_two_stage_training_writes_both_stages_skips_finished_runs_and_refuses_u
     assert (run / "stage1" / "best.pt").exists() and config["stage"]["selected_by"] == "val_loss"
     assert config["count_offset"] == pytest.approx(math.log(3))  # train has 4, 9, 8 and 89; 49 is held out
     assert history["epochs"][0]["step"] == 1 and "pair_accuracy" in history["epochs"][0]
+    assert config["pretrained"] is False and set(config["git"]) == {"commit", "dirty"}
     args = ["--approach", "two_step_mean", "--exclude", "49", "--epochs", "1", "--no-pretrained",
             "--data", str(pipeline / "data"), *common(pipeline)]
     before = (run / "best.pt").stat().st_mtime
@@ -106,29 +107,53 @@ def test_boxes_come_only_from_single_digit_train_and_val_sequences_without_held_
 
 
 def test_evaluate_scores_val_compares_runs_and_scores_test_once(pipeline):
-    evaluate_main(["fused_ex49", "two_step_mean_ex49", *common(pipeline)])
+    evaluate_main(["fused_ex49_scratch", "two_step_mean_ex49_scratch", *common(pipeline)])
 
-    metrics = json.loads((pipeline / "results" / "runs" / "two_step_mean_ex49" / "metrics_val.json").read_text())
+    metrics = json.loads((pipeline / "results" / "runs" / "two_step_mean_ex49_scratch" / "metrics_val.json").read_text())
     assert set(metrics["methods"]) == {"sequence", "anchor", "vote"}
     assert metrics["hold_out"]["sequences"] == 2  # the 49s of train and val players
     assert {"shortcuts", "speed", "without_count_offset"} <= set(metrics)
     compare = pipeline / "results" / "compare"
     with (compare / "table.csv").open() as file:
-        assert {row["run"] for row in csv.DictReader(file)} == {"fused_ex49", "two_step_mean_ex49"}
-    evaluate_main(["parseq_gate_ex49", *common(pipeline)])  # the third reader through the same evaluation
-    assert (pipeline / "results" / "runs" / "parseq_gate_ex49" / "attention.png").exists()
+        assert {row["run"] for row in csv.DictReader(file)} == {"fused_ex49_scratch", "two_step_mean_ex49_scratch"}
+    evaluate_main(["parseq_gate_ex49_scratch", *common(pipeline)])  # the third reader through the same evaluation
+    assert (pipeline / "results" / "runs" / "parseq_gate_ex49_scratch" / "attention.png").exists()
     assert all((compare / name).exists() for name in ("curves.png", "temporal.png", "holdout.png"))
 
-    evaluate_main(["two_step_mean_ex49", "--split", "test", *common(pipeline)])
+    evaluate_main(["two_step_mean_ex49_scratch", "--split", "test", *common(pipeline)])
     with pytest.raises(FileExistsError, match="only once"):
-        evaluate_main(["two_step_mean_ex49", "--split", "test", *common(pipeline)])
+        evaluate_main(["two_step_mean_ex49_scratch", "--split", "test", *common(pipeline)])
+
+
+def test_verify_matches_the_recorded_test_answers_and_analyse_writes_its_evidence(pipeline):
+    run = pipeline / "results" / "runs" / "two_step_mean_ex49_scratch"  # scored on test above
+    before = (run / "metrics_test.json").read_text()
+    found = evaluate_main(["--verify", str(run), *common(pipeline)])
+    assert found["same_answers"] == found["sequences"] > 0
+    assert (run / "verify_test.json").exists() and (run / "metrics_test.json").read_text() == before
+
+    analysis = evaluate_main(["--analyse", "two_step_mean_ex49_scratch", *common(pipeline)])
+    assert {"match_overlap", "paired_tests", "track_bootstrap", "hold_out", "few_frames", "int8"} <= set(analysis)
+    assert analysis["match_overlap"]["all"]["count"] == found["sequences"] and analysis["gate"] is None
+    assert {"train players", "val players"} <= set(analysis["hold_out"]["two_step_mean_ex49_scratch"])
+    assert (pipeline / "results" / "compare" / "analysis_two_step_mean_ex49_scratch.json").exists()
 
 
 def test_predict_reads_one_number_and_never_loads_the_anchor(pipeline, tmp_path):
     sequence = shutil.copytree(pipeline / "data" / "4" / "p4_0" / "0", tmp_path / "sequence")
     (sequence / "1_0_0_anchor.jpg").write_bytes(b"not an image")  # loading it would fail
-    run = pipeline / "results" / "runs" / "two_step_mean_ex49"
+    run = pipeline / "results" / "runs" / "two_step_mean_ex49_scratch"
 
     for extra in ([], ["--two-digit-share", "0.5"]):
         number = predict_main([str(sequence), "--weights", str(run), "--device", "cpu", *extra])
         encode_label(number)  # a valid one- or two-digit number
+
+
+def test_predict_warns_about_a_flag_it_cannot_use_and_explains_a_bad_folder(pipeline, tmp_path, capsys):
+    sequence = pipeline / "data" / "4" / "p4_0" / "0"
+    run = pipeline / "results" / "runs" / "parseq_gate_ex49_scratch"
+    predict_main([str(sequence), "--weights", str(run), "--device", "cpu", "--two-digit-share", "0.5"])
+    assert "only applies to two-step" in capsys.readouterr().err
+    for folder in (tmp_path / "missing", tmp_path):  # no folder; a folder without frames
+        with pytest.raises(SystemExit, match="cannot read"):
+            predict_main([str(folder), "--weights", str(run), "--device", "cpu"])

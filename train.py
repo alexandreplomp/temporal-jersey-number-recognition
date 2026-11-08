@@ -7,8 +7,10 @@ needs digit boxes for its hold-out setting; if results/boxes/<tag>/ is missing, 
 Held-out numbers and the train sequences linked to them are left out of everything.
 
 Writes results/runs/<approach>_<tag>/ (tag "ex49" for --exclude 49, "all" without; "_s<seed>" for
-another seed). A two-stage approach writes stage 1 to <run>/stage1/ and starts stage 2 from it:
-    config.json      the approach, its stages, the held-out numbers, the count offset, sizes
+another seed, "_scratch" for --no-pretrained). A two-stage approach writes stage 1 to <run>/stage1/ and
+starts stage 2 from it:
+    config.json      the approach, its stages, the held-out numbers, the count offset, sizes, and the
+                     git commit of the code (with "dirty" if tracked code had uncommitted changes)
     splits.json      the split it was trained with
     history.json     per epoch: train loss, train-check and val scores (+ pair metric), and the best
     curves.png       loss, accuracy, two-digit and macro accuracy per epoch
@@ -23,6 +25,7 @@ import argparse
 import json
 import math
 import shutil
+import subprocess
 import time
 
 import torch
@@ -91,8 +94,21 @@ def parse_args(argv=None):
     parser.add_argument("--device", default="auto", help="auto picks cuda, then mps, then cpu")
     parser.add_argument("--data", type=Path, default=Path("data"))
     parser.add_argument("--results", type=Path, default=Path("results"))
-    parser.add_argument("--no-pretrained", action="store_true", help="random start (tests only)")
+    parser.add_argument("--no-pretrained", action="store_true",
+                        help="random start instead of ImageNet / PARSeq weights: measures what pretraining adds")
     return parser.parse_args(argv)
+
+
+def git_state():
+    """{"commit", "dirty"} of the code next to this file; "unknown" outside a git checkout."""
+    def git(*command):
+        return subprocess.run(["git", *command], cwd=Path(__file__).parent, capture_output=True, text=True,
+                              check=True).stdout.strip()
+    try:
+        changed = git("status", "--porcelain", "--untracked-files=no", "--", "jersey", "*.py", "reproduce.sh")
+        return {"commit": git("rev-parse", "HEAD"), "dirty": bool(changed)}
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": "unknown", "dirty": None}
 
 
 def check_bank(bank, exclude, train_ids):
@@ -176,7 +192,8 @@ def main(argv=None):
     device = pick_device(args.device)
     approach, exclude = APPROACHES[args.approach], tuple(args.exclude)
     tag = tag_of(exclude)
-    run_dir = args.results / "runs" / (f"{args.approach}_{tag}" + (f"_s{args.seed}" if args.seed else ""))
+    run_dir = args.results / "runs" / (f"{args.approach}_{tag}" + (f"_s{args.seed}" if args.seed else "")
+                                       + ("_scratch" if args.no_pretrained else ""))
     if (run_dir / "done.json").exists():
         print(f"{run_dir} is already trained; skipping (results are never overwritten)")
         return
@@ -207,7 +224,8 @@ def main(argv=None):
     config = {"approach": args.approach, "reader": approach.reader, "temporal": approach.temporal,
               "max_frames": approach.max_frames, "exclude": list(exclude), "linked_dropped": sorted(linked),
               "seed": args.seed, "count_offset": count_offset, "data": str(args.data), "device": str(device),
-              "parameters": sum(p.numel() for p in model.parameters()), "torch": str(torch.__version__)}
+              "parameters": sum(p.numel() for p in model.parameters()), "torch": str(torch.__version__),
+              "pretrained": not args.no_pretrained, "git": git_state()}
     run = {"args": args, "device": device, "approach": approach, "train_ids": train_ids, "val_ids": val_ids,
            "bank": bank, "pair_set": pair_set, "config": config,
            "val_loader": make_loader(JerseyDataset(args.data, val_ids, max_frames=approach.max_frames),

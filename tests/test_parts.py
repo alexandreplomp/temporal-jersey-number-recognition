@@ -12,7 +12,7 @@ from jersey.data import (
     split_ids,
 )
 from jersey.engine import box_cells, two_step_loss
-from jersey.metrics import count_flips, macro, per_number, wilson_interval
+from jersey.metrics import count_flips, group_bootstrap, macro, match_of, mcnemar_exact, per_number, track_of, wilson_interval
 from jersey.model import (
     CELL_STRIDE, LOCAL_BLOCKS, READERS, TEMPORAL, JerseyModel, compose, count_prior, load_run, offset_for_share,
     predict_digits,
@@ -306,6 +306,18 @@ def test_metrics_on_a_hand_computed_example():
     assert low == pytest.approx(0.21, abs=0.01) and high == 1
     prefix = torch.tensor([[[4, BLANK], [8, BLANK], [8, BLANK]]])
     assert count_flips(prefix, torch.tensor([3]))["flips"] == 1
+
+
+def test_paired_test_track_bootstrap_and_match_of():
+    assert mcnemar_exact(0, 0) == 1.0 and mcnemar_exact(5, 5) == 1.0
+    assert mcnemar_exact(10, 0) == pytest.approx(2 / 2 ** 10)  # all ten disagreements one way
+    assert mcnemar_exact(3, 1) == mcnemar_exact(1, 3) == pytest.approx(2 * 5 / 16)
+    correct = [1, 1, 1, 1, 0, 0, 1, 0]
+    groups = ["a", "a", "a", "a", "b", "b", "c", "c"]  # whole tracks are resampled
+    low, high = group_bootstrap(correct, groups, resamples=500)
+    assert 0 <= low <= sum(correct) / len(correct) <= high <= 1 and low < high
+    assert group_bootstrap([1, 1], ["a", "b"]) == (1.0, 1.0)
+    assert track_of("49/1003_15408/2") == "1003_15408" and match_of("49/1003_15408/2") == "1003"
 
 
 def test_parseq_reads_only_the_number_area_and_end_in_position_2_is_blank():

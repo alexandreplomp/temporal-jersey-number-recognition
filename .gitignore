@@ -24,8 +24,10 @@ venv/
 data/
 
 # Outputs of the blocks: remade by reproduce.sh. Final weights live in weights/; the table and graphs
-# of the reported run stay in results/compare/.
-/results/runs/
+# of the reported run stay in results/compare/. Each run's config, history, metrics and predictions are
+# kept, so every number in the table can be traced; its weights and pictures are not.
+/results/runs/**/*.pt
+/results/runs/**/*.png
 /results/boxes/
 
 # macOS

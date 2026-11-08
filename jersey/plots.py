@@ -42,14 +42,26 @@ def curves(history, path, stage_switch=None):
     _save(figure, path)
 
 
-def compare_curves(histories, path):
-    """Val loss and val accuracy per epoch, one line per run: histories {run name: entries}."""
+def compare_curves(segments, path):
+    """Val loss and val accuracy per epoch, one colour per run: segments {run name: [stage 1 entries, stage 2 entries]}.
+
+    Stage 2 starts from stage 1's best epoch, not its last, so the stages are drawn as separate lines
+    (stage 2 dashed) with the switch marked, never joined.
+    """
     figure = Figure(figsize=(12, 4))
+    switches = sorted({stages[-1][0]["step"] for stages in segments.values() if len(stages) > 1})
     for axis, key in zip(figure.subplots(1, 2), ("val_loss", "val_accuracy")):
-        for name, history in histories.items():
-            axis.plot([entry["step"] for entry in history], [entry[key] for entry in history], label=name)
-        axis.set_title(key.replace("_", " "))
-        axis.set_xlabel("epoch (both stages)")
+        for index, (name, stages) in enumerate(segments.items()):
+            colour = f"C{index}"
+            for number, stage in enumerate(stages):
+                axis.plot([entry["step"] for entry in stage], [entry[key] for entry in stage], color=colour,
+                          linestyle="--" if number else "-", label=name if number == len(stages) - 1 else None)
+        for switch in switches:
+            axis.axvline(switch, color="grey", linestyle=":", linewidth=1)
+        axis.set_title(key.replace("_", " ") + (" (dotted line: stage 2 starts from stage 1's best epoch)" if switches else ""),
+                       fontsize=9)
+        axis.set_xlabel("epoch")
+        axis.xaxis.set_major_locator(MaxNLocator(integer=True))
         axis.legend(fontsize=7)
     _save(figure, path)
 
@@ -62,6 +74,7 @@ def temporal(metrics, path):
         by_frames = found["stability"]["accuracy_by_frames"]
         left.plot([int(k) for k in by_frames], [v["accuracy"] for v in by_frames.values()], marker="o", label=name)
     left.set(title="accuracy after the first k frames", xlabel="frames", ylabel="accuracy")
+    left.xaxis.set_major_locator(MaxNLocator(integer=True))
     left.legend(fontsize=7)
     names = list(metrics)
     for i, method in enumerate(("sequence", "anchor", "vote")):
@@ -73,24 +86,33 @@ def temporal(metrics, path):
     _save(figure, path)
 
 
-def holdout(answers, path, held="49"):
-    """What the held-out number is read as, per run: answers {run name: {answer: count}}."""
-    kinds = ("right", "other two-digit", "one digit")
-    figure = Figure(figsize=(8, 4))
+def holdout(answers, path, held="49", named=("99", "89")):
+    """What the held-out number is read as, per run: answers {run name: {"counts": {answer: count}, "sequences": n}}.
+
+    Bars are shares with the count written on each part; the common wrong answers in named get their own part.
+    """
+    def kind_of(answer):
+        if answer == held:
+            return "right"
+        if answer in named:
+            return answer
+        return "one digit" if len(answer) == 1 else "other two-digit"
+
+    kinds = ("right", *named, "other two-digit", "one digit")
+    figure = Figure(figsize=(9, 4.5))
     axis = figure.subplots()
+    labels = [f"{name}\n(n={found['sequences']})" for name, found in answers.items()]
     bottoms = [0.0] * len(answers)
     for kind in kinds:
-        heights = []
-        for counts in answers.values():
-            total = sum(counts.values())
-            share = sum(c for a, c in counts.items() if (a == held) == (kind == "right")
-                        and (kind == "right" or (len(a) == 1) == (kind == "one digit")))
-            heights.append(share / total if total else 0)
-        axis.bar(list(answers), heights, bottom=bottoms, label=kind)
+        counts = [sum(c for a, c in found["counts"].items() if kind_of(a) == kind) for found in answers.values()]
+        heights = [c / found["sequences"] for c, found in zip(counts, answers.values())]
+        bars = axis.bar(labels, heights, bottom=bottoms, label=kind if kind == "right" else f"read as {kind}")
+        axis.bar_label(bars, labels=[str(c) if c else "" for c in counts], label_type="center", fontsize=7)
         bottoms = [b + h for b, h in zip(bottoms, heights)]
-    axis.set(title=f"held-out {held} read as", ylabel="share of sequences", ylim=(0, 1))
-    axis.tick_params(axis="x", rotation=20, labelsize=8)
-    axis.legend()
+    axis.set(title=f"held-out {held} read as (development hold-out: train- and val-split players)",
+             ylabel="share of sequences", ylim=(0, 1))
+    axis.tick_params(axis="x", labelsize=7)
+    axis.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1, 1))
     _save(figure, path)
 
 

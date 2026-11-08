@@ -24,18 +24,25 @@ shipped weights need no download.
 ## Read a number
 
 ```bash
-uv run predict.py data/4/<player>/<sequence>                       # the shipped model in weights/final/
-# two-step readers only: a league where about half the numbers have two digits
-uv run predict.py <folder> --weights results/runs/two_step_pool_ex49 --two-digit-share 0.5
+uv run predict.py data/4/<player>/<sequence>                       # model A, weights/final/
+uv run predict.py data/4/<player>/<sequence> --weights weights/two_step_ex49   # model B
+uv run predict.py <folder> --weights weights/two_step_ex49 --two-digit-share 0.5  # B, more two-digit numbers
 ```
 
-It prints one number and its confidence. The anchor is ignored, since a tracker has none. The shipped
-PARSeq model has no count head, so `--two-digit-share` gives a warning and is ignored. The two-step
-weights are not committed, so the second line works only after training that run.
+It prints one number and its confidence. The anchor is ignored, since a tracker has none. Two models
+are shipped:
+- **A, `weights/final/`:** `parseq_gate` trained on all ten numbers, the best accuracy; it starts from
+  PARSeq's scene-text weights.
+- **B, `weights/two_step_ex49/`:** `two_step_full` (0.51M parameters, 2.0 MB), trained with 49 held out;
+  it uses only the given data plus ImageNet weights.
 
-To check the headline result from the shipped weights, run `uv run evaluate.py --verify weights/final`.
-It scores the test split again into `weights/final/verify_test.json` and compares every answer with
-`weights/final/predictions_test.csv`. It should report 0.9642 and the same answer on 866/866.
+`--two-digit-share` sets B's count prior for a league with a different share of two-digit numbers. A has
+no count head, so for A the flag gives a warning and is ignored.
+
+To check the shipped weights, run `uv run evaluate.py --verify weights/final` (or
+`weights/two_step_ex49`). It scores the test split again into `verify_test.json` in that folder and
+compares every answer with the recorded `predictions_test.csv`. It should report 0.9642 on 866/866
+identical answers for A, and 0.9282 on 850/850 for B.
 
 ## Pipeline
 
@@ -57,7 +64,8 @@ for steps 7-8):
 3. the choice of the final approach on val
 4. the final model on all numbers
 5. the test split, once
-6. copying the weights to `weights/final/` and verifying them
+6. copying A's weights to `weights/final/` and B's (the best `two_step_*` run by the same rule) to
+   `weights/two_step_ex49/`, and verifying both
 7. two more seeds and a random start of the final approach, 49 held out
 8. the extra analysis
 
@@ -108,8 +116,8 @@ thread. The comparison below holds 49 out of training, so 49 is a number never s
 | `parseq_gate`, random start | 0.462 | 0.513 | 0/105 | 0.435 | 0.454 | 0.409 | 0/16 | 22.9 MB |
 
 The random start reads no held-out 49 at all, so most of PARSeq's held-out result comes from its
-scene-text pretraining. `two_step_pool` (0.37M parameters, ImageNet only) is the alternative trained on
-this data alone.
+scene-text pretraining. Model B, `two_step_full` (0.51M parameters, ImageNet only), is the alternative
+trained on this data alone: 6 of 16 held-out 49s on test.
 
 The graphs are in `results/compare/`.
 
@@ -126,7 +134,8 @@ jersey/
   metrics.py  scores with 95% intervals
   plots.py    every figure
 tests/  test_parts.py  test_pipeline.py  helpers.py
-weights/final/   the shipped model: parseq_gate on all numbers, with its config, split, metrics and test predictions
+weights/final/          model A: parseq_gate on all numbers, with its config, split, metrics and test predictions
+weights/two_step_ex49/  model B: two_step_full with 49 held out, the same files
 results/runs/    each run's config, history, metrics and predictions (weights not committed)
 LICENSE-parseq  NOTICE   Apache-2.0 licence and attribution for the code taken from PARSeq
 ```

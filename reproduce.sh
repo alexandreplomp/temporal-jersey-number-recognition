@@ -43,6 +43,17 @@ done
 mkdir -p weights/final
 cp "results/runs/${FINAL}_all/"{best.pt,config.json,splits.json,metrics_val.json,metrics_test.json,predictions_test.csv} weights/final/
 uv run evaluate.py --verify weights/final
+#    Model B, trained only on the given data plus ImageNet: the two_step_* run picked by the same val rule.
+TWO_STEP=$(uv run python - <<'PY'
+import csv
+with open("results/compare/table.csv") as file:
+    rows = [r for r in csv.DictReader(file) if r["approach"].startswith("two_step") and r["run"].endswith("_ex49")]
+print(max(rows, key=lambda r: float(r["val_macro_5"]))["run"])
+PY
+)
+mkdir -p weights/two_step_ex49
+cp "results/runs/$TWO_STEP/"{best.pt,config.json,splits.json,metrics_val.json,metrics_test.json,predictions_test.csv} weights/two_step_ex49/
+uv run evaluate.py --verify weights/two_step_ex49
 
 # 7. How much of the held-out result is the final approach, and how much its pretraining and its seed:
 #    two more seeds and a random start, 49 held out as before (not candidates for the final approach).

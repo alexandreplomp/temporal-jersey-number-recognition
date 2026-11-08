@@ -12,8 +12,8 @@ use and reproduction.
    and the locked dependencies:
 
    ```bash
-   git clone https://github.com/alexandreplomp/trackbox_case.git
-   cd trackbox_case
+   git clone https://github.com/alexandreplomp/temporal-jersey-number-recognition.git
+   cd temporal-jersey-number-recognition
    uv sync
    ```
 

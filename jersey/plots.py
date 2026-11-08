@@ -116,7 +116,7 @@ def holdout(answers, path, held="49", named=("99", "89")):
     _save(figure, path)
 
 
-# The final model as drawn in REPORT.md: (box text, tensor shape on the arrow into the next box).
+# The final model: (box text, tensor shape on the arrow into the next box).
 ARCHITECTURE = (
     ("sequence of T crops\n(T ≤ 10, 192 × 96)", "B, T, 3, 192, 96"),
     ("number area:\nrows 17-48%,\ncolumns 15-85%,\nstretched to 32 × 128", "N real frames,\n3, 32, 128"),

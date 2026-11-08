@@ -3,7 +3,8 @@
 A lightweight model that reads a jersey number from a sequence of player crops and gives one stable
 answer per sequence. It reads every number as two positions, each a digit or blank, with one shared
 digit classifier. So a number never seen in training, such as 94 after 4, 9 and 49, can still be read.
-The design, the results and their limits are in [REPORT.md](REPORT.md).
+The design, results and limits are discussed in the separate written report; this README covers setup,
+use and reproduction.
 
 ## Setup
 
@@ -24,8 +25,8 @@ shipped weights need no download.
 
 ```bash
 uv run predict.py data/4/<player>/<sequence>                       # the shipped model in weights/final/
+# two-step readers only: a league where about half the numbers have two digits
 uv run predict.py <folder> --weights results/runs/two_step_pool_ex49 --two-digit-share 0.5
-                                                                    # two-step readers only: a league with more two-digit numbers
 ```
 
 It prints one number and its confidence. The anchor is ignored, since a tracker has none. The shipped
@@ -42,13 +43,14 @@ Each script is one step; it reads the previous step's files and writes its own.
 
 | Step | Command | Writes |
 |---|---|---|
-| Data | `uv run prepare.py` | `results/data_issues.json`, `results/splits.json` (by player, 70/15/15) |
+| Data | `uv run prepare.py` | `results/data_issues.json`, `results/splits.json` (by track folder, 70/15/15) |
 | Train | `uv run train.py --approach two_step_mean --exclude 49` | `results/runs/two_step_mean_ex49/`, and `results/boxes/ex49/` if missing |
 | Evaluate | `uv run evaluate.py two_step_mean_ex49` (add `--split test` once) | `metrics_val.json` in the run, and `results/compare/` |
 | Analyse | `uv run evaluate.py --analyse parseq_gate_all` | `results/compare/analysis_parseq_gate_all.json` (match overlap, paired tests, track-level intervals, gate, int8) |
 | Predict | `uv run predict.py <folder>` | one number |
 
-`reproduce.sh` runs everything in order, in about 5.5 h on an Apple M4 Pro (3.7 h for the reported runs, 1.6 h for steps 7-8):
+`reproduce.sh` runs everything in order, in about 5.5 h on an Apple M4 Pro (3.7 h for steps 1-6, 1.6 h
+for steps 7-8):
 
 1. the tests
 2. the comparison runs with 49 held out
@@ -63,7 +65,8 @@ Each script is one step; it reads the previous step's files and writes its own.
 different numbers. The record is the committed one:
 
 - the shipped weights;
-- each run's `config.json` (with its git commit), `history.json`, `metrics_*.json` and `predictions_*.csv` in `results/runs/` (weights not committed);
+- each run's `config.json` (with its git commit), `history.json`, `metrics_*.json` and
+  `predictions_*.csv` in `results/runs/` (weights not committed);
 - `results/compare/`.
 
 `uv run pytest` runs the tests on small fake data (about 2 minutes).
@@ -83,7 +86,8 @@ The approaches are the table at the top of `train.py`; each row changes one thin
 
 ## Results
 
-From one run of `reproduce.sh` (`results/compare/table.csv`, `reproduce.log`). The final model is
+From `reproduce.sh` (`results/compare/table.csv`, each run's metrics in `results/runs/`; the seed and
+random-start rows come from step 7). The final model is
 `parseq_gate` trained on all ten numbers, shipped in `weights/final/`: **0.964 on the 866 test sequences**
 (anchor alone 0.844, frame vote 0.947), 6.0M parameters, 22.9 MB, 36 ms per 10-frame sequence on one CPU
 thread. The comparison below holds 49 out of training, so 49 is a number never seen in training:
@@ -103,10 +107,11 @@ thread. The comparison below holds 49 out of training, so 49 is a number never s
 | `parseq_gate`, seed 2 | 0.957 | 0.949 | 59/105 | 0.889 | 0.946 | 0.961 | 10/16 | 22.9 MB |
 | `parseq_gate`, random start | 0.462 | 0.513 | 0/105 | 0.435 | 0.454 | 0.409 | 0/16 | 22.9 MB |
 
-Most of PARSeq's held-out result comes from its scene-text pretraining. REPORT.md, "Use of pretrained
-weights", gives the details and the lightweight alternative trained only on this data plus ImageNet.
+The random start reads no held-out 49 at all, so most of PARSeq's held-out result comes from its
+scene-text pretraining. `two_step_pool` (0.37M parameters, ImageNet only) is the alternative trained on
+this data alone.
 
-The graphs are in `results/compare/`; [REPORT.md](REPORT.md) discusses them.
+The graphs are in `results/compare/`.
 
 ## Layout
 

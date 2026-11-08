@@ -115,8 +115,8 @@ prepare.py   train.py   evaluate.py   predict.py   reproduce.sh
 jersey/
   data.py     labels, splits, the sequence dataset and its augmentation
   pairs.py    finding digit boxes without annotation, spliced two-digit sequences, the pair metric
-  model.py    readers (fused, two-step, parseq), frame combiners (mean, pool, transformer)
-  parseq.py   the PARSeq-Tiny network (Apache-2.0, from baudm/parseq), cut to the ten digits
+  model.py    readers (fused, two-step, parseq), frame combiners (mean, pool, transformer), and the
+              PARSeq-Tiny network (Apache-2.0, from baudm/parseq) cut to the ten digits
   engine.py   losses, one training epoch, evaluation, shared helpers
   metrics.py  scores with 95% intervals
   plots.py    every figure

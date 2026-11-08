@@ -2,9 +2,9 @@ This project includes code from PARSeq (https://github.com/baudm/parseq),
 Copyright 2022 Darwin Bautista, licensed under the Apache License, Version 2.0
 (full text in LICENSE-parseq).
 
-  jersey/parseq.py  the PARSeq-Tiny encoder, decoder layer and weight initialisation, kept as written
-                    there except: the tokenizer-driven decoding loop is replaced by read(), and
-                    named_apply is defined locally.
+  jersey/model.py   the "PARSeq-Tiny" section: the encoder, decoder layer and weight initialisation,
+                    kept as written there except: the tokenizer-driven decoding loop is replaced by
+                    ParseqDecoder.read(), and named_apply is defined locally.
 
 The released PARSeq-Tiny weights (parseq_tiny-e7a21b54.pt, PARSeq release v1.0.0) are downloaded at
 training time and fine-tuned here; the fine-tuned weights are shipped in weights/final/best.pt.

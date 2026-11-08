@@ -44,7 +44,7 @@ from torch import nn
 from torch.nn import functional as F
 from torchvision.transforms import v2
 
-from jersey import parseq, plots
+from jersey import plots
 from jersey.data import (
     IMAGE_SIZE, IMAGENET_MEAN, IMAGENET_STD, JerseyDataset, denormalize, encode_label, filter_numbers, number_of,
     read_splits, torso_mask,
@@ -54,7 +54,7 @@ from jersey.metrics import (
     band_accuracy, confusions, count_flips, group_bootstrap, heldout_error_share, majority_baseline, match_of,
     mcnemar_exact, per_number, scores, shot_bands, to_numbers, track_of, wilson_interval,
 )
-from jersey.model import load_run, predict_digits
+from jersey.model import load_run, parseq_digit_weights, predict_digits
 from train import APPROACHES
 
 METHODS = ("sequence", "anchor", "vote")
@@ -528,7 +528,7 @@ def int8(model, config, val_ids, args):
 
 def head_drift(model):
     """Cosine similarity per output row (end, digits 0-9) between the fine-tuned and the released PARSeq head."""
-    released = parseq.digit_weights()[1]["head.weight"]
+    released = parseq_digit_weights()[1]["head.weight"]
     tuned = model.reader.text.head.weight.detach().cpu()
     similarity = F.cosine_similarity(tuned, released, dim=1).tolist()
     return {name: round(value, 4) for name, value in zip(["end", *map(str, range(10))], similarity)}

@@ -17,7 +17,7 @@ use and reproduction.
    uv sync
    ```
 
-2. **The dataset is not in this repository.** Move it into the project and rename it `data`.** Every script looks for the dataset in `data/` at
+2. **The dataset is not in this repository.** Move it into the project and rename it `data`. Every script looks for the dataset in `data/` at
    the project root, and the run configs store that path:.
 
    ```bash

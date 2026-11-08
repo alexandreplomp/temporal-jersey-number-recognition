@@ -18,7 +18,7 @@
   "torch": "2.15.0",
   "pretrained": true,
   "git": {
-    "commit": "2d81b72283d7f6287f78c65c95235920277393b6",
+    "commit": "69c9b1abe2bd8c182c45d39cf256d124fb8f10c6",
     "dirty": false
   },
   "stage": {

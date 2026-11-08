@@ -194,6 +194,9 @@ def main(argv=None):
     tag = tag_of(exclude)
     run_dir = args.results / "runs" / (f"{args.approach}_{tag}" + (f"_s{args.seed}" if args.seed else "")
                                        + ("_scratch" if args.no_pretrained else ""))
+    if (run_dir / "done.json").exists() and not (run_dir / "best.pt").exists():
+        raise SystemExit(f"{run_dir} is a committed record without weights (they are not in Git); to train it again,"
+                         f" move the records aside first: mv {args.results / 'runs'} {args.results / 'runs_reported'}")
     if (run_dir / "done.json").exists():
         print(f"{run_dir} is already trained; skipping (results are never overwritten)")
         return

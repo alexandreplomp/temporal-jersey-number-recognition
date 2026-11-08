@@ -79,6 +79,12 @@ def test_two_stage_training_writes_both_stages_skips_finished_runs_and_refuses_u
             train_main(args)
     finally:
         (run / "done.json.bak").rename(run / "done.json")
+    (run / "best.pt").rename(run / "best.pt.bak")  # as in a fresh clone: the record without weights
+    try:
+        with pytest.raises(SystemExit, match="without weights"):
+            train_main(args)
+    finally:
+        (run / "best.pt.bak").rename(run / "best.pt")
 
 
 def test_training_refuses_boxes_that_could_paste_a_held_out_number(pipeline, tmp_path):

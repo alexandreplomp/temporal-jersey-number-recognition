@@ -8,36 +8,69 @@ use and reproduction.
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/); it installs Python 3.12 and the locked dependencies:
+1. **Get the code and install.** This needs [uv](https://docs.astral.sh/uv/), which installs Python 3.12
+   and the locked dependencies:
 
-```bash
-uv sync
-```
+   ```bash
+   git clone https://github.com/alexandreplomp/trackbox_case.git
+   cd trackbox_case
+   uv sync
+   ```
 
-Unzip the dataset into `data/`, so the layout is `data/<number>/<player>/<sequence>/<frames>.jpg`. Each
-sequence may have one `*_anchor` image, used only in training. `data/` is never changed and is not in Git.
+2. **Download the dataset.** It is not in this repository. Download the ZIP from the case brief's link
+   (<https://drive.google.com/file/d/183CXUk99IyCRgfAPeRnpo5xBYCER1-an/view>) and unzip it. That gives a
+   folder `temporal_jersey_nr_recognition_dataset_subset/`.
 
-The first training run downloads pretrained weights, so it needs internet: MobileNetV3-Small (ImageNet,
-torchvision) and PARSeq-Tiny (scene text, github.com/baudm/parseq). `predict.py` and `evaluate.py` on the
-shipped weights need no download.
+3. **Move it into the project and rename it `data`.** Every script looks for the dataset in `data/` at
+   the project root, and the run configs store that path:
+
+   ```bash
+   mv ~/Downloads/temporal_jersey_nr_recognition_dataset_subset ./data
+   ```
+
+   The layout must then be `data/<number>/<player>/<sequence>/<frames>.jpg`, for example
+   `data/4/1000_19764/0/1000_46888_0.jpg`. Each sequence may have one `*_anchor` image, used only in
+   training. The scripts never change `data/`, and `.gitignore` keeps it out of Git.
+
+Run every command from the project root (the folder with `README.md`).
+
+**Internet:** the first *training* run downloads pretrained weights: MobileNetV3-Small (ImageNet, from
+torchvision) and PARSeq-Tiny (scene text, from github.com/baudm/parseq). Reading numbers and checking
+the shipped weights need no download.
 
 ## Read a number
 
 ```bash
-uv run predict.py data/4/<player>/<sequence>                       # model A, weights/final/
-uv run predict.py data/4/<player>/<sequence> --weights weights/two_step_ex49   # model B
-uv run predict.py <folder> --weights weights/two_step_ex49 --two-digit-share 0.5  # B, more two-digit numbers
+uv run predict.py data/4/1000_19764/0                                  # model A, weights/final/
+uv run predict.py data/4/1000_19764/0 --weights weights/two_step_ex49  # model B
 ```
 
-It prints one number and its confidence. The anchor is ignored, since a tracker has none. Two models
-are shipped:
+It prints one number and its confidence, e.g. `4  (confidence 0.96)`. The anchor is ignored, since a
+tracker has none.
+
+**Your own sequences.** `predict.py` reads any folder of `.jpg`, `.jpeg` or `.png` crops of one player,
+not only folders in `data/`:
+
+```bash
+uv run predict.py path/to/my_sequence
+```
+
+- **Frame order:** frames are read in time order, by the number after the first underscore
+  (`<prefix>_<frame>_...`, as in the dataset). Other names are read in alphabetical order.
+- **Many frames:** at most 10 frames are used, spread evenly over the sequence.
+- **Anchors:** files ending in `_anchor` are skipped.
+- **Errors:** a missing folder, or one with no frames, gives a one-line error.
+
+Two models are shipped:
 - **A, `weights/final/`:** `parseq_gate` trained on all ten numbers, the best accuracy; it starts from
   PARSeq's scene-text weights.
 - **B, `weights/two_step_ex49/`:** `two_step_full` (0.51M parameters, 2.0 MB), trained with 49 held out;
   it uses only the given data plus ImageNet weights.
 
-`--two-digit-share` sets B's count prior for a league with a different share of two-digit numbers. A has
-no count head, so for A the flag gives a warning and is ignored.
+`--two-digit-share` sets B's count prior for a league with a different share of two-digit numbers. For
+example, with about half the numbers two-digit:
+`uv run predict.py <folder> --weights weights/two_step_ex49 --two-digit-share 0.5`. A has no count head,
+so for A the flag gives a warning and is ignored.
 
 To check the shipped weights, run `uv run evaluate.py --verify weights/final` (or
 `weights/two_step_ex49`). It scores the test split again into `verify_test.json` in that folder and
@@ -56,8 +89,38 @@ Each script is one step; it reads the previous step's files and writes its own.
 | Analyse | `uv run evaluate.py --analyse parseq_gate_all` | `results/compare/analysis_parseq_gate_all.json` (match overlap, paired tests, track-level intervals, gate, int8) |
 | Predict | `uv run predict.py <folder>` | one number |
 
+### Train and evaluate something new
+
+```bash
+uv run prepare.py                                           # once: checks the data, writes the split
+uv run train.py --approach parseq_gate --exclude 49 --seed 3  # a new run: results/runs/parseq_gate_ex49_s3/
+uv run evaluate.py parseq_gate_ex49_s3                      # val scores, and the table and graphs remade
+uv run evaluate.py parseq_gate_ex49_s3 --split test         # test scores: allowed once per run
+uv run predict.py data/49/100_5810/0 --weights results/runs/parseq_gate_ex49_s3
+```
+
+- **Approaches:** `--approach` is one of the six in the table below. `--exclude 4 49` holds out more
+  numbers, and `--no-pretrained` starts from random weights. A smoke test: `--epochs 1`, which takes
+  minutes. Delete its run folder afterwards, or the full run with the same settings is skipped.
+- **Run names:** a run's folder name comes from its settings (`_ex49`, `_s<seed>`, `_scratch`; `_all`
+  without `--exclude`).
+- **Runs are never overwritten:** a finished run is skipped when asked again, and a half-finished one
+  must be deleted first. To try a variant, change a setting, for example `--seed`. Retraining a reported
+  run (e.g. `parseq_gate_ex49`) needs `results/runs/` moved aside, since its record is committed without
+  weights.
+- **Devices:** training uses CUDA, then Apple MPS, then CPU, whichever exists first (`--device` overrides
+  it). `--workers 0` helps when data-loader processes misbehave.
+
 `reproduce.sh` runs everything in order, in about 5.5 h on an Apple M4 Pro (3.7 h for steps 1-6, 1.6 h
-for steps 7-8):
+for steps 7-8). `results/runs/` holds the committed record of the reported runs without their weights,
+so move it aside first; the script refuses to start otherwise:
+
+```bash
+mv results/runs results/runs_reported
+bash reproduce.sh
+```
+
+The steps:
 
 1. the tests
 2. the comparison runs with 49 held out

@@ -7,6 +7,15 @@
 # each run is scored on the test split only once.
 set -euo pipefail
 
+# A fresh clone holds the reported runs' records in results/runs/ but not their weights: train anew elsewhere.
+for done in results/runs/*/done.json; do
+    if [ -f "$done" ] && [ ! -f "$(dirname "$done")/best.pt" ]; then
+        echo "results/runs/ holds the committed record of the reported runs, without weights."
+        echo "Move it aside to reproduce from scratch:  mv results/runs results/runs_reported"
+        exit 1
+    fi
+done
+
 uv run pytest
 
 # 1. Data checks and the player-level split (reproduces the committed results/splits.json).

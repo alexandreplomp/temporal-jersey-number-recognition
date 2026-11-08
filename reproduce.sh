@@ -57,5 +57,4 @@ done
 # 8. Extra evidence for the report: match overlap, paired tests, track-level intervals, gate weights,
 #    int8 and fewer frames (results/compare/analysis_<run>.json; test predictions are only read).
 uv run evaluate.py --analyse "${FINAL}_all"
-uv run evaluate.py
 echo "done: results/compare/ holds the table and graphs; weights/final/ the shipped model"

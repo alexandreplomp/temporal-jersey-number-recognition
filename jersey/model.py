@@ -253,7 +253,7 @@ PARSEQ_TEXT_SIZE = (32, 128)  # height, width of PARSeq's input
 PARSEQ_PATCH_SIZE = (4, 8)
 PARSEQ_DIM, PARSEQ_ENCODER_HEADS, PARSEQ_DECODER_HEADS = 192, 3, 6  # the Tiny size
 PARSEQ_POSITIONS = 3  # digit 1, digit 2 or end, end after two digits
-PARSEQ_EOS, PARSEQ_BOS, PARSEQ_PAD, PARSEQ_TOKENS = 0, 11, 12, 13
+PARSEQ_BOS, PARSEQ_TOKENS = 11, 13  # start token; 13 tokens: end, ten digits, start, padding
 PARSEQ_WEIGHTS_URL = "https://github.com/baudm/parseq/releases/download/v1.0.0/parseq_tiny-e7a21b54.pt"
 PARSEQ_RELEASED_ROWS = list(range(11)) + [95, 96]  # end, the digits, start, padding among the 97 released tokens
 
@@ -527,7 +527,7 @@ class JerseyModel(nn.Module):
             raise ValueError(f"unknown reader {reader!r} or temporal {temporal!r}")
         if IMAGE_SIZE[0] % BACKBONE_STRIDE or IMAGE_SIZE[1] % BACKBONE_STRIDE:
             raise ValueError(f"IMAGE_SIZE {IMAGE_SIZE} must be divisible by {BACKBONE_STRIDE}")
-        self.reader_name, self.temporal_name, self.count_offset = reader, temporal, count_offset
+        self.reader_name, self.count_offset = reader, count_offset
         self.freeze_batchnorm = pretrained  # keep the pretrained BatchNorm statistics fixed
         self.reader = READERS[reader](dim, pretrained)
         self.frames = TEMPORAL[temporal](self.reader.token_dim, max_frames, dropout)

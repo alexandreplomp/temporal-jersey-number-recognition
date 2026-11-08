@@ -48,7 +48,7 @@ Each script is one step; it reads the previous step's files and writes its own.
 | Analyse | `uv run evaluate.py --analyse parseq_gate_all` | `results/compare/analysis_parseq_gate_all.json` (match overlap, paired tests, track-level intervals, gate, int8) |
 | Predict | `uv run predict.py <folder>` | one number |
 
-`reproduce.sh` runs everything in order, in about 6 h on an Apple M4 Pro:
+`reproduce.sh` runs everything in order, in about 5.5 h on an Apple M4 Pro (3.7 h for the reported runs, 1.6 h for steps 7-8):
 
 1. the tests
 2. the comparison runs with 49 held out

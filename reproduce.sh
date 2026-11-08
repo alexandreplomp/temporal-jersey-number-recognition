@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every step of the hand-in, in order: about 6 hours on an Apple M4 Pro (MPS). The first training run
+# Every step of the hand-in, in order: about 5.5 hours on an Apple M4 Pro (MPS). The first training run
 # downloads the ImageNet MobileNetV3 and PARSeq-Tiny weights, so it needs internet. MPS training is not
 # bit-for-bit deterministic: a rerun gives slightly different numbers; the committed metrics are the record.
 # Run from the project root with the data in data/. Nothing is ever overwritten, and the script can be

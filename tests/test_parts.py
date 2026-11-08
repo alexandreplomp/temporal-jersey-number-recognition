@@ -8,7 +8,7 @@ import torch
 
 from jersey import pairs
 from jersey.data import (
-    AUGMENT, BLANK, IMAGE_SIZE, JerseyDataset, decode_label, denormalize, encode_label, find_images, make_sampler,
+    BLANK, IMAGE_SIZE, JerseyDataset, decode_label, denormalize, encode_label, find_images, make_sampler,
     split_ids,
 )
 from jersey.engine import box_cells, two_step_loss

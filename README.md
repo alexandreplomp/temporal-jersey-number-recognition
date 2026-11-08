@@ -17,12 +17,8 @@ use and reproduction.
    uv sync
    ```
 
-2. **Download the dataset.** It is not in this repository. Download the ZIP from the case brief's link
-   (<https://drive.google.com/file/d/183CXUk99IyCRgfAPeRnpo5xBYCER1-an/view>) and unzip it. That gives a
-   folder `temporal_jersey_nr_recognition_dataset_subset/`.
-
-3. **Move it into the project and rename it `data`.** Every script looks for the dataset in `data/` at
-   the project root, and the run configs store that path:
+2. **The dataset is not in this repository.** Move it into the project and rename it `data`.** Every script looks for the dataset in `data/` at
+   the project root, and the run configs store that path:.
 
    ```bash
    mv ~/Downloads/temporal_jersey_nr_recognition_dataset_subset ./data

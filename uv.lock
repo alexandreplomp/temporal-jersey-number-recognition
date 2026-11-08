@@ -1163,6 +1163,35 @@ wheels = [
 ]
 
 [[package]]
+name = "temporal-jersey-number-recognition"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "pillow" },
+    { name = "timm" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "matplotlib", specifier = ">=3.11.2" },
+    { name = "pillow", specifier = ">=13.0.0" },
+    { name = "timm", specifier = ">=1.0.31" },
+    { name = "torch", specifier = ">=2.15.0" },
+    { name = "torchvision", specifier = ">=0.29.2" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.2.0" }]
+
+[[package]]
 name = "timm"
 version = "1.0.31"
 source = { registry = "https://pypi.org/simple" }
@@ -1252,35 +1281,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/0d/ea/b2a5bd54b28a324da
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl", hash = "sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73", size = 80199, upload-time = "2026-09-11T07:25:14.599Z" },
 ]
-
-[[package]]
-name = "trackbox-case"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "matplotlib" },
-    { name = "pillow" },
-    { name = "timm" },
-    { name = "torch" },
-    { name = "torchvision" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "matplotlib", specifier = ">=3.11.2" },
-    { name = "pillow", specifier = ">=13.0.0" },
-    { name = "timm", specifier = ">=1.0.31" },
-    { name = "torch", specifier = ">=2.15.0" },
-    { name = "torchvision", specifier = ">=0.29.2" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.2.0" }]
 
 [[package]]
 name = "triton"

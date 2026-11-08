@@ -1,5 +1,5 @@
 [project]
-name = "trackbox-case"
+name = "temporal-jersey-number-recognition"
 version = "0.1.0"
 description = "Temporal jersey number recognition from player crop sequences."
 readme = "README.md"

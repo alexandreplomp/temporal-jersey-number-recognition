@@ -21,7 +21,7 @@ venv/
 *~
 
 # Raw data is shared separately and never committed
-data/
+/data
 
 # Outputs of the blocks: remade by reproduce.sh. Final weights live in weights/; the table and graphs
 # of the reported run stay in results/compare/. Each run's config, history, metrics and predictions are

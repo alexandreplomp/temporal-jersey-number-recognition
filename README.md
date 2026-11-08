@@ -18,7 +18,7 @@ use and reproduction.
    ```
 
 2. **The dataset is not in this repository.** Move it into the project and rename it `data`. Every script looks for the dataset in `data/` at
-   the project root, and the run configs store that path:.
+   the project root, and the run configs store that path:
 
    ```bash
    mv ~/Downloads/temporal_jersey_nr_recognition_dataset_subset ./data
